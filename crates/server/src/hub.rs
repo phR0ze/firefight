@@ -356,30 +356,53 @@ impl Hub {
         Ok(self.client_view(self.store.client(id).expect("exists")))
     }
 
-    /// Start every idle or paused timer assigned to a client, all at the same
-    /// instant. Timers already running or firing are left alone.
-    pub fn start_client_timers(&mut self, id: ClientId, now: DateTime<Utc>) -> Result<Vec<TimerRun>> {
+    /// Apply `op` to every timer assigned to a client, all at the same instant.
+    pub fn bulk_client(&mut self, id: ClientId, op: Bulk, now: DateTime<Utc>) -> Result<Vec<TimerRun>> {
         let c = self.store.client(id).ok_or_else(|| anyhow!("no such client"))?;
-        let ids: Vec<_> = c
-            .assigned_timers
+        let ids = c.assigned_timers.clone();
+        self.bulk(ids, op, now)
+    }
+
+    /// Apply `op` to every timer assigned to at least one approved client, all
+    /// at the same instant. Each timer is touched once, however many clients
+    /// share it.
+    pub fn bulk_all(&mut self, op: Bulk, now: DateTime<Utc>) -> Result<Vec<TimerRun>> {
+        let mut seen = HashSet::new();
+        let ids: Vec<_> = self
+            .store
+            .data
+            .clients
             .iter()
-            .copied()
-            .filter(|t| self.runs.get(t).is_some_and(|r| matches!(r.state, RunState::Idle | RunState::Paused)))
+            .filter(|c| c.status == ClientStatus::Approved)
+            .flat_map(|c| c.assigned_timers.iter().copied())
+            .filter(|t| seen.insert(*t))
             .collect();
-        // One timer failing to start (e.g. a scheduled timer with no upcoming
-        // occurrence) should not block the rest.
-        let started: Vec<_> = ids
+        self.bulk(ids, op, now)
+    }
+
+    /// Timers the operation does not apply to are skipped, and one timer
+    /// failing (e.g. a scheduled timer with no upcoming occurrence) does not
+    /// block the rest.
+    fn bulk(&mut self, ids: Vec<TimerId>, op: Bulk, now: DateTime<Utc>) -> Result<Vec<TimerRun>> {
+        let ids: Vec<_> = ids
+            .into_iter()
+            .filter(|t| match (self.store.timer(*t), self.runs.get(t)) {
+                (Some(def), Some(run)) => op.applies(def, run),
+                _ => false,
+            })
+            .collect();
+        let done: Vec<_> = ids
             .into_iter()
             .filter_map(|t| {
-                self.control(t, Control::Start, now)
-                    .inspect_err(|e| tracing::warn!(timer = %t, "start failed: {e}"))
+                self.control(t, op.control(), now)
+                    .inspect_err(|e| tracing::warn!(timer = %t, "{op:?} failed: {e}"))
                     .ok()
             })
             .collect();
-        if started.is_empty() {
-            bail!("no idle or paused timers to start");
+        if done.is_empty() {
+            bail!("{}", op.nothing_to_do());
         }
-        Ok(started)
+        Ok(done)
     }
 
     pub fn test_run(&self, id: ClientId, actions: Vec<Action>) -> Result<()> {
@@ -511,6 +534,43 @@ pub enum Control {
     Add { secs: u64 },
     Reset,
     Dismiss,
+}
+
+/// An operation applied to many timers at once from the control deck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bulk {
+    /// Start idle timers and resume paused ones.
+    Start,
+    /// Pause running countdowns (scheduled timers cannot be paused).
+    Pause,
+    /// Return every timer not already at its starting state to idle.
+    Reset,
+}
+
+impl Bulk {
+    fn applies(self, def: &TimerDef, run: &TimerRun) -> bool {
+        match self {
+            Bulk::Start => matches!(run.state, RunState::Idle | RunState::Paused),
+            Bulk::Pause => run.state == RunState::Running && matches!(def.kind, TimerKind::Countdown { .. }),
+            Bulk::Reset => !(run.state == RunState::Idle && run.remaining_ms == base_total_ms(def)),
+        }
+    }
+
+    fn control(self) -> Control {
+        match self {
+            Bulk::Start => Control::Start,
+            Bulk::Pause => Control::Pause,
+            Bulk::Reset => Control::Reset,
+        }
+    }
+
+    fn nothing_to_do(self) -> &'static str {
+        match self {
+            Bulk::Start => "no idle or paused timers to start",
+            Bulk::Pause => "no running countdowns to pause",
+            Bulk::Reset => "no timers to reset",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -675,14 +735,83 @@ mod tests {
         let running_end = hub.runs[&running.id].ends_at;
 
         let later = now + chrono::Duration::seconds(5);
-        let started = hub.start_client_timers(a, later).unwrap();
+        let started = hub.bulk_client(a, Bulk::Start, later).unwrap();
         assert_eq!(started.len(), 2);
         assert_eq!(hub.runs[&idle.id].state, RunState::Running);
         assert_eq!(hub.runs[&paused.id].state, RunState::Running);
         assert_eq!(hub.runs[&running.id].ends_at, running_end, "running timer untouched");
         assert_eq!(hub.runs[&other.id].state, RunState::Idle, "unassigned timer untouched");
 
-        assert!(hub.start_client_timers(a, later).is_err(), "nothing left to start");
+        assert!(hub.bulk_client(a, Bulk::Start, later).is_err(), "nothing left to start");
+    }
+
+    #[test]
+    fn start_all_client_timers_covers_every_approved_client_once() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let shared = hub.upsert_timer(countdown(60), now);
+        let only_b = hub.upsert_timer(countdown(60), now);
+        let pending_only = hub.upsert_timer(countdown(60), now);
+        let unassigned = hub.upsert_timer(countdown(60), now);
+        let (a, _) = hello(&mut hub, None, None).unwrap();
+        let (b, _) = hello(&mut hub, None, None).unwrap();
+        let (p, _) = hello(&mut hub, None, None).unwrap();
+        hub.approve_client(a, now).unwrap();
+        hub.approve_client(b, now).unwrap();
+        hub.set_assignments(a, vec![shared.id], now).unwrap();
+        hub.set_assignments(b, vec![shared.id, only_b.id], now).unwrap();
+        hub.set_assignments(p, vec![pending_only.id], now).unwrap();
+
+        let started = hub.bulk_all(Bulk::Start, now).unwrap();
+        assert_eq!(started.len(), 2, "shared timer started once");
+        assert_eq!(hub.runs[&shared.id].state, RunState::Running);
+        assert_eq!(hub.runs[&only_b.id].state, RunState::Running);
+        assert_eq!(hub.runs[&pending_only.id].state, RunState::Idle, "pending client ignored");
+        assert_eq!(hub.runs[&unassigned.id].state, RunState::Idle);
+        assert!(hub.bulk_all(Bulk::Start, now).is_err(), "nothing left to start");
+    }
+
+    #[test]
+    fn bulk_pause_and_reset() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let a_timer = hub.upsert_timer(countdown(60), now);
+        let b_timer = hub.upsert_timer(countdown(60), now);
+        let scheduled = hub.upsert_timer(
+            TimerDef {
+                kind: TimerKind::AtTime {
+                    time: chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    repeat: Repeat::Daily,
+                },
+                ..countdown(1)
+            },
+            now,
+        );
+        let (a, _) = hello(&mut hub, None, None).unwrap();
+        let (b, _) = hello(&mut hub, None, None).unwrap();
+        hub.approve_client(a, now).unwrap();
+        hub.approve_client(b, now).unwrap();
+        hub.set_assignments(a, vec![a_timer.id, scheduled.id], now).unwrap();
+        hub.set_assignments(b, vec![b_timer.id], now).unwrap();
+        hub.bulk_all(Bulk::Start, now).unwrap();
+
+        // Per client: only that client's countdowns; the scheduled timer keeps running.
+        let paused = hub.bulk_client(a, Bulk::Pause, now).unwrap();
+        assert_eq!(paused.len(), 1);
+        assert_eq!(hub.runs[&a_timer.id].state, RunState::Paused);
+        assert_eq!(hub.runs[&scheduled.id].state, RunState::Running);
+        assert_eq!(hub.runs[&b_timer.id].state, RunState::Running);
+        assert!(hub.bulk_client(a, Bulk::Pause, now).is_err(), "nothing left to pause");
+
+        hub.bulk_all(Bulk::Pause, now).unwrap();
+        assert_eq!(hub.runs[&b_timer.id].state, RunState::Paused);
+
+        let reset = hub.bulk_all(Bulk::Reset, now).unwrap();
+        assert_eq!(reset.len(), 3);
+        for t in [a_timer.id, b_timer.id, scheduled.id] {
+            assert_eq!(hub.runs[&t].state, RunState::Idle);
+        }
+        assert!(hub.bulk_all(Bulk::Reset, now).is_err(), "nothing left to reset");
     }
 
     #[test]

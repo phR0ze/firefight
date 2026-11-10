@@ -82,6 +82,8 @@ class _DeckPageState extends State<DeckPage> {
               connected: store.connected,
               error: store.error,
               onNew: store.connected ? () => _edit() : null,
+              onBulk: (op) =>
+                  store.connected && _anyApplies(store, op) ? () => guard(context, () => api.bulkAll(op)) : null,
               onSettings: widget.onSettings,
             ),
             const Divider(height: 1),
@@ -117,11 +119,27 @@ class _DeckPageState extends State<DeckPage> {
   }
 }
 
+/// Whether [op] would change any timer assigned to an approved client.
+bool _anyApplies(DeckStore store, BulkOp op) => op.appliesToAny(
+  store.clients.values.where((c) => c.status == ClientStatus.approved).expand((c) => c.assignedTimers),
+  store.timers,
+  store.runs,
+);
+
 class _Header extends StatelessWidget {
-  const _Header({required this.connected, required this.error, required this.onNew, required this.onSettings});
+  const _Header({
+    required this.connected,
+    required this.error,
+    required this.onNew,
+    required this.onBulk,
+    required this.onSettings,
+  });
   final bool connected;
   final String? error;
   final VoidCallback? onNew;
+
+  /// Handler for a bulk button, or null to disable it.
+  final VoidCallback? Function(BulkOp) onBulk;
   final VoidCallback onSettings;
 
   @override
@@ -148,6 +166,17 @@ class _Header extends StatelessWidget {
           const Spacer(),
           IconButton(onPressed: onSettings, icon: const Icon(Icons.settings_outlined), tooltip: 'Connection settings'),
           const SizedBox(width: 8),
+          for (final op in BulkOp.values) ...[
+            Tooltip(
+              message: '${op.label} every timer assigned to a client',
+              child: OutlinedButton.icon(
+                onPressed: onBulk(op),
+                icon: Icon(op.icon, size: 20),
+                label: Text('${op.label} all'),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           FilledButton(onPressed: onNew, child: const Text('+ New timer')),
         ],
       ),

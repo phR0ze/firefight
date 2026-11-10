@@ -205,6 +205,37 @@ class TimerDef {
 
 enum RunState { idle, running, paused, firing }
 
+/// An operation the control deck applies to many timers at once. Mirrors the
+/// server's rules so buttons can be disabled when nothing would change.
+enum BulkOp {
+  start('Start'),
+  pause('Pause'),
+  reset('Reset');
+
+  const BulkOp(this.label);
+  final String label;
+
+  bool appliesTo(TimerDef def, TimerRun? run) {
+    final state = run?.state ?? RunState.idle;
+    return switch (this) {
+      BulkOp.start => state == RunState.idle || state == RunState.paused,
+      BulkOp.pause => state == RunState.running && def.kind is Countdown,
+      BulkOp.reset =>
+        !(state == RunState.idle &&
+            (run == null ||
+                run.remainingMs ==
+                    switch (def.kind) {
+                      Countdown(:final duration) => duration.inMilliseconds,
+                      AtTime() => 0,
+                    })),
+    };
+  }
+
+  /// Whether this applies to any of [timerIds].
+  bool appliesToAny(Iterable<String> timerIds, Map<String, TimerDef> timers, Map<String, TimerRun> runs) =>
+      timerIds.any((id) => timers[id] != null && appliesTo(timers[id]!, runs[id]));
+}
+
 class TimerRun {
   const TimerRun({
     required this.runId,

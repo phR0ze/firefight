@@ -6,6 +6,14 @@ import '../models.dart';
 import '../theme.dart';
 import 'deck_page.dart';
 
+extension BulkOpIcon on BulkOp {
+  IconData get icon => switch (this) {
+    BulkOp.start => Icons.play_arrow_rounded,
+    BulkOp.pause => Icons.pause_rounded,
+    BulkOp.reset => Icons.restart_alt_rounded,
+  };
+}
+
 /// Side panel listing clients: pending ones to approve, approved ones as drop targets.
 class ClientsPanel extends StatelessWidget {
   const ClientsPanel({super.key, required this.store, required this.api});
@@ -168,12 +176,6 @@ class ClientCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final startable = client.assignedTimers.any(
-      (id) => switch (store.runs[id]?.state) {
-        RunState.idle || RunState.paused => true,
-        _ => false,
-      },
-    );
     return DragTarget<String>(
       onWillAcceptWithDetails: (d) => !client.assignedTimers.contains(d.data),
       onAcceptWithDetails: (d) =>
@@ -203,14 +205,17 @@ class ClientCard extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Start all assigned timers',
-                    visualDensity: VisualDensity.compact,
-                    iconSize: 20,
-                    color: Palette.amber,
-                    onPressed: startable ? () => guard(context, () => api.startClientTimers(client.id)) : null,
-                    icon: const Icon(Icons.play_arrow_rounded),
-                  ),
+                  for (final op in BulkOp.values)
+                    IconButton(
+                      tooltip: '${op.label} all assigned timers',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 20,
+                      color: op == BulkOp.start ? Palette.amber : Palette.text,
+                      onPressed: op.appliesToAny(client.assignedTimers, store.timers, store.runs)
+                          ? () => guard(context, () => api.bulkClient(client.id, op))
+                          : null,
+                      icon: Icon(op.icon),
+                    ),
                   PopupMenuButton<String>(
                     tooltip: 'More',
                     padding: EdgeInsets.zero,

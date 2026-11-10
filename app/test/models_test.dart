@@ -61,4 +61,23 @@ void main() {
     // Rounds up so the display never shows 00:00 early.
     expect(formatRemaining(const Duration(milliseconds: 200)), '00:01');
   });
+
+  test('BulkOp matches the server rules', () {
+    final countdown = TimerDef(id: 'c', name: 'c', kind: const Countdown(Duration(seconds: 10)));
+    final scheduled = TimerDef(id: 's', name: 's', kind: const AtTime((hour: 9, minute: 0), RepeatDaily()));
+    TimerRun run(RunState state, {int remainingMs = 10000}) =>
+        TimerRun(runId: 'r', timerId: 'c', state: state, endsAt: null, remainingMs: remainingMs, totalMs: 10000);
+
+    expect(BulkOp.start.appliesTo(countdown, run(RunState.idle)), isTrue);
+    expect(BulkOp.start.appliesTo(countdown, run(RunState.paused)), isTrue);
+    expect(BulkOp.start.appliesTo(countdown, run(RunState.running)), isFalse);
+
+    expect(BulkOp.pause.appliesTo(countdown, run(RunState.running)), isTrue);
+    expect(BulkOp.pause.appliesTo(scheduled, run(RunState.running)), isFalse, reason: 'scheduled cannot pause');
+
+    expect(BulkOp.reset.appliesTo(countdown, run(RunState.idle)), isFalse, reason: 'already at start');
+    expect(BulkOp.reset.appliesTo(countdown, run(RunState.idle, remainingMs: 70000)), isTrue, reason: '+1m added');
+    expect(BulkOp.reset.appliesTo(countdown, run(RunState.firing, remainingMs: 0)), isTrue);
+    expect(BulkOp.reset.appliesTo(scheduled, run(RunState.running)), isTrue);
+  });
 }

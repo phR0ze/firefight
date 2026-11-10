@@ -19,7 +19,7 @@ use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
-use crate::hub::{Control, HelloOutcome, Hub};
+use crate::hub::{Bulk, Control, HelloOutcome, Hub};
 use crate::store::token_matches_plain;
 
 #[derive(Clone)]
@@ -40,11 +40,14 @@ pub fn router(state: AppState) -> Router {
         .route("/timers/{id}", put(update_timer).delete(delete_timer))
         .route("/timers/{id}/{op}", post(control_timer))
         .route("/clients", get(list_clients))
+        .route("/clients/start", post(|s| bulk_all(s, Bulk::Start)))
+        .route("/clients/pause", post(|s| bulk_all(s, Bulk::Pause)))
+        .route("/clients/reset", post(|s| bulk_all(s, Bulk::Reset)))
         .route("/clients/{id}", axum::routing::patch(rename_client).delete(delete_client))
         .route("/clients/{id}/approve", post(approve_client))
         .route("/clients/{id}/assignments", put(set_assignments))
         .route("/clients/{id}/test", post(test_run))
-        .route("/clients/{id}/start", post(start_client_timers))
+        .route("/clients/{id}/{op}", post(bulk_client))
         .route("/ws", get(admin_ws))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -219,9 +222,24 @@ async fn set_assignments(
     Ok(Json(s.hub().set_assignments(id, body.timers, Utc::now())?))
 }
 
-/// Start (or resume) every idle or paused timer assigned to a client.
-async fn start_client_timers(State(s): State<AppState>, Path(id): Path<ClientId>) -> ApiResult<Vec<TimerRun>> {
-    Ok(Json(s.hub().start_client_timers(id, Utc::now())?))
+fn parse_bulk(op: &str) -> Result<Bulk, ApiError> {
+    match op {
+        "start" => Ok(Bulk::Start),
+        "pause" => Ok(Bulk::Pause),
+        "reset" => Ok(Bulk::Reset),
+        _ => Err(ApiError(StatusCode::NOT_FOUND, format!("unknown operation {op}"))),
+    }
+}
+
+/// Start, pause or reset every timer assigned to a client.
+async fn bulk_client(State(s): State<AppState>, Path((id, op)): Path<(ClientId, String)>) -> ApiResult<Vec<TimerRun>> {
+    let op = parse_bulk(&op)?;
+    Ok(Json(s.hub().bulk_client(id, op, Utc::now())?))
+}
+
+/// Start, pause or reset every timer assigned to any approved client.
+async fn bulk_all(State(s): State<AppState>, op: Bulk) -> ApiResult<Vec<TimerRun>> {
+    Ok(Json(s.hub().bulk_all(op, Utc::now())?))
 }
 
 #[derive(Deserialize)]

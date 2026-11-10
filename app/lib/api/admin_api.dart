@@ -62,8 +62,11 @@ class AdminApi {
   Future<void> setAssignments(String id, List<String> timers) =>
       _send('PUT', '/clients/$id/assignments', body: {'timers': timers});
 
-  /// Start every idle or paused timer assigned to a client.
-  Future<void> startClientTimers(String id) => _send('POST', '/clients/$id/start');
+  /// Apply [op] to every timer assigned to a client.
+  Future<void> bulkClient(String id, BulkOp op) => _send('POST', '/clients/$id/${op.name}');
+
+  /// Apply [op] to every timer assigned to any approved client.
+  Future<void> bulkAll(BulkOp op) => _send('POST', '/clients/${op.name}');
 
   Future<void> testRun(String clientId, List<TimerAction> actions) => _send(
     'POST',
