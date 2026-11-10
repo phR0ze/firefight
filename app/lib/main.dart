@@ -7,8 +7,9 @@ import 'theme.dart';
 
 /// Arguments: `--mode=server|client`, `--server=<host:port>`, `--token=<admin token>`,
 /// `--agent-port=<port>`. Values given here are remembered for the next launch.
-void main(List<String> args) {
-  final settings = AppSettings.load()..applyArgs(args);
+Future<void> main(List<String> args) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final settings = (await AppSettings.load())..applyArgs(args);
   settings.adminToken ??= AppSettings.localAdminToken();
   runApp(FirefightApp(settings: settings));
 }
@@ -49,6 +50,7 @@ class _FirefightAppState extends State<FirefightApp> {
       home: editing
           ? SetupPage(
               initial: settings,
+              deckOnly: AppSettings.deckOnly,
               onSave: _saved,
               onCancel: _needsSetup ? null : () => setState(() => editing = false),
             )
@@ -71,8 +73,11 @@ class _FirefightAppState extends State<FirefightApp> {
 
 /// First-run / settings screen: pick the mode and how to connect.
 class SetupPage extends StatefulWidget {
-  const SetupPage({super.key, required this.initial, required this.onSave, this.onCancel});
+  const SetupPage({super.key, required this.initial, required this.onSave, this.onCancel, this.deckOnly = false});
   final AppSettings initial;
+
+  /// Hide the mode choice and only offer the control deck (Android).
+  final bool deckOnly;
   final ValueChanged<AppSettings> onSave;
   final VoidCallback? onCancel;
 
@@ -81,7 +86,7 @@ class SetupPage extends StatefulWidget {
 }
 
 class _SetupPageState extends State<SetupPage> {
-  late AppMode mode = widget.initial.mode ?? AppMode.server;
+  late AppMode mode = widget.deckOnly ? AppMode.server : (widget.initial.mode ?? AppMode.server);
   late final server = TextEditingController(text: widget.initial.server);
   late final token = TextEditingController(text: widget.initial.adminToken ?? '');
   late final port = TextEditingController(text: '${widget.initial.agentPort}');
@@ -110,72 +115,82 @@ class _SetupPageState extends State<SetupPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 460),
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.all(32),
-            children: [
-              const Row(
-                children: [
-                  Icon(Icons.timer_outlined, color: Palette.amber),
-                  SizedBox(width: 10),
-                  Text('Firefight', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
-                ],
-              ),
-              const SizedBox(height: 24),
-              SegmentedButton<AppMode>(
-                segments: const [
-                  ButtonSegment(
-                    value: AppMode.server,
-                    label: Text('Control deck'),
-                    icon: Icon(Icons.dashboard_outlined),
-                  ),
-                  ButtonSegment(value: AppMode.client, label: Text('Client display'), icon: Icon(Icons.tv_outlined)),
-                ],
-                selected: {mode},
-                onSelectionChanged: (s) => setState(() => mode = s.first),
-              ),
-              const SizedBox(height: 24),
-              if (mode == AppMode.server) ...[
-                TextField(
-                  controller: server,
-                  decoration: const InputDecoration(labelText: 'Server (host:port)'),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: token,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Admin token',
-                    helperText: 'Found in the server\'s data directory (admin_token).',
-                  ),
-                ),
-              ] else
-                TextField(
-                  controller: port,
-                  decoration: const InputDecoration(
-                    labelText: 'Local agent port',
-                    helperText: 'The firefight-agent on this machine (--ui-port).',
-                  ),
-                ),
-              if (error != null) ...[
-                const SizedBox(height: 14),
-                Text(error!, style: const TextStyle(color: Palette.red)),
-              ],
-              const SizedBox(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  if (widget.onCancel != null) ...[
-                    OutlinedButton(onPressed: widget.onCancel, child: const Text('Cancel')),
-                    const SizedBox(width: 10),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.all(32),
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.timer_outlined, color: Palette.amber),
+                    SizedBox(width: 10),
+                    Text('Firefight', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
                   ],
-                  FilledButton(onPressed: _save, child: const Text('Continue')),
+                ),
+                const SizedBox(height: 24),
+                if (!widget.deckOnly) ...[
+                  SegmentedButton<AppMode>(
+                    segments: const [
+                      ButtonSegment(
+                        value: AppMode.server,
+                        label: Text('Control deck'),
+                        icon: Icon(Icons.dashboard_outlined),
+                      ),
+                      ButtonSegment(
+                        value: AppMode.client,
+                        label: Text('Client display'),
+                        icon: Icon(Icons.tv_outlined),
+                      ),
+                    ],
+                    selected: {mode},
+                    onSelectionChanged: (s) => setState(() => mode = s.first),
+                  ),
+                  const SizedBox(height: 24),
                 ],
-              ),
-            ],
+                if (mode == AppMode.server) ...[
+                  TextField(
+                    controller: server,
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    decoration: const InputDecoration(labelText: 'Server (host:port)', hintText: 'server-host:7878'),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: token,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Admin token',
+                      helperText: 'Found in the server\'s data directory (admin_token).',
+                    ),
+                  ),
+                ] else
+                  TextField(
+                    controller: port,
+                    decoration: const InputDecoration(
+                      labelText: 'Local agent port',
+                      helperText: 'The firefight-agent on this machine (--ui-port).',
+                    ),
+                  ),
+                if (error != null) ...[
+                  const SizedBox(height: 14),
+                  Text(error!, style: const TextStyle(color: Palette.red)),
+                ],
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (widget.onCancel != null) ...[
+                      OutlinedButton(onPressed: widget.onCancel, child: const Text('Cancel')),
+                      const SizedBox(width: 10),
+                    ],
+                    FilledButton(onPressed: _save, child: const Text('Continue')),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

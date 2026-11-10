@@ -96,3 +96,6 @@ Color ringColor(RunState s) => switch (s) {
   RunState.paused => Palette.slate,
   RunState.idle => Palette.track,
 };
+
+/// Widths below this use the phone layout (tabs, full-screen editor).
+const compactBreakpoint = 700.0;

@@ -5,10 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  Future<Future<TimerDef?> Function()> open(WidgetTester tester, {TimerDef? initial}) async {
+  Future<Future<TimerDef?> Function()> open(
+    WidgetTester tester, {
+    TimerDef? initial,
+    Size size = const Size(1280, 820),
+  }) async {
     TimerDef? result;
     var closed = false;
-    tester.view.physicalSize = const Size(1280, 820);
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
@@ -98,5 +102,47 @@ void main() {
     expect(def.id, 'x');
     expect(def.allowClientDismiss, isFalse);
     expect(((def.kind as AtTime).repeat as RepeatDays).days, {Weekday.mon, Weekday.fri});
+  });
+
+  testWidgets('phone layout uses tabs and saves from the app bar', (tester) async {
+    final result = await open(tester, size: const Size(400, 800));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull, reason: 'no overflow at phone width');
+    expect(find.text('1 · When'), findsOneWidget);
+    expect(find.text('2 · Then do'), findsOneWidget);
+    expect(find.text('Save timer'), findsNothing, reason: 'save lives in the app bar');
+
+    // Saving without a name shows the error above the tabs.
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+    expect(find.text('Give the timer a name.'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, 'Phone timer');
+    await tester.tap(find.text('2 · Then do'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('+ Sound'));
+    await tester.pump();
+    await tester.tap(find.text('+ Command'));
+    await tester.pump();
+    await tester.enterText(find.widgetWithText(TextFormField, '').last, 'true');
+    expect(tester.takeException(), isNull, reason: 'two steps fit at phone width');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    final def = (await result())!;
+    expect(def.name, 'Phone timer');
+    expect(def.actions.map((a) => a.kind.runtimeType), [SoundAction, CommandAction]);
+  });
+
+  testWidgets('action steps lay out without overflow in a narrow dialog', (tester) async {
+    await open(tester, size: const Size(900, 820));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('+ Sound'));
+    await tester.pump();
+    await tester.tap(find.text('+ Command'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
   });
 }

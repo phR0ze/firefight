@@ -155,6 +155,17 @@ class ClientCard extends StatelessWidget {
     }
   }
 
+  /// Checklist of every timer, for assigning without drag-and-drop (phones).
+  Future<void> _assign(BuildContext context) async {
+    final ids = await showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => AssignSheet(client: client, timers: store.timers.values.toList()),
+    );
+    if (ids != null && context.mounted) await guard(context, () => api.setAssignments(client.id, ids));
+  }
+
   Future<void> _remove(BuildContext context) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -220,8 +231,13 @@ class ClientCard extends StatelessWidget {
                     tooltip: 'More',
                     padding: EdgeInsets.zero,
                     icon: const Icon(Icons.more_vert, size: 18, color: Palette.muted),
-                    onSelected: (v) => v == 'rename' ? _rename(context) : _remove(context),
+                    onSelected: (v) => switch (v) {
+                      'assign' => _assign(context),
+                      'rename' => _rename(context),
+                      _ => _remove(context),
+                    },
                     itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'assign', child: Text('Assign timers…')),
                       PopupMenuItem(value: 'rename', child: Text('Rename')),
                       PopupMenuItem(value: 'remove', child: Text('Remove')),
                     ],
@@ -258,6 +274,80 @@ class ClientCard extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Bottom sheet listing every timer with a checkbox; pops the chosen timer ids
+/// (in deck order) on Save.
+class AssignSheet extends StatefulWidget {
+  const AssignSheet({super.key, required this.client, required this.timers});
+  final ClientView client;
+  final List<TimerDef> timers;
+
+  @override
+  State<AssignSheet> createState() => _AssignSheetState();
+}
+
+class _AssignSheetState extends State<AssignSheet> {
+  late final Set<String> _selected = {...widget.client.assignedTimers};
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Text(
+                'Timers for ${widget.client.name}',
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (widget.timers.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Text('No timers yet.', style: TextStyle(color: Palette.muted)),
+              ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final t in widget.timers)
+                    CheckboxListTile(
+                      value: _selected.contains(t.id),
+                      onChanged: (on) => setState(() => on! ? _selected.add(t.id) : _selected.remove(t.id)),
+                      title: Text(t.name),
+                      subtitle: Text(t.subtitle, style: const TextStyle(color: Palette.muted, fontSize: 12)),
+                      controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  OutlinedButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+                  const SizedBox(width: 10),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, [
+                      for (final t in widget.timers)
+                        if (_selected.contains(t.id)) t.id,
+                    ]),
+                    child: const Text('Save'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

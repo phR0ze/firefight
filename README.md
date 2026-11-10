@@ -11,6 +11,7 @@ never runs actions itself.
 - [Overview](#overview)
   - [Components](#components)
   - [Getting started](#getting-started)
+  - [Android control deck](#android-control-deck)
   - [Running as services](#running-as-services)
   - [Security model](#security-model)
 - [Development](#development)
@@ -24,6 +25,7 @@ never runs actions itself.
 | `firefight-server` (Rust)        | one machine          | Stores timers and clients, drives timer state, pairs agents                       |
 | `firefight-agent` (Rust)         | every client machine | Mirrors its assigned timers, runs actions when they finish                        |
 | `app` (Flutter, `--mode=server`) | admin machine        | Control deck: create/edit/start timers, approve clients, drag-and-drop assignment |
+| `app` (Flutter, Android)         | admin's phone        | The same control deck, laid out for a phone                                       |
 | `app` (Flutter, `--mode=client`) | client machines      | Display of the timers assigned to this machine, with Dismiss                      |
 
 ```
@@ -78,6 +80,23 @@ cargo build --release
 
 Settings passed on the command line are remembered in `~/.config/firefight/app.json`.
 
+### Android control deck
+
+The Android app is the same control deck as the Linux one. It talks to the same server, so timers, clients
+and assignments stay in sync across every deck and client display. The phone only stores the server
+address and admin token.
+
+```bash
+nix develop
+cd app && flutter build apk --release      # signed with the debug key, for sideloading
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+On first launch enter the server's LAN address (`<server-host>:7878`) and the admin token from the
+server's data directory. On a phone, timers and clients are on separate tabs: assign timers with
+**Assign timers…** in a client's ⋮ menu (or long-press and drag a timer card where both are visible).
+Like the Linux deck, it uses plain HTTP, so use it only on a trusted LAN.
+
 ### Running as services
 
 Example systemd user units are in [`contrib/systemd`](contrib/systemd). The agent unit runs inside the
@@ -111,7 +130,7 @@ Layout:
 crates/core     shared models, wire protocol, schedule math, run state machine
 crates/server   firefight-server (axum)
 crates/agent    firefight-agent (tokio, rodio)
-app/            Flutter app (control deck + client display)
+app/            Flutter app (control deck + client display; Linux and Android)
 contrib/        systemd user units
 docs/design     UI mockups
 ```
