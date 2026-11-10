@@ -2,6 +2,7 @@
 //! It never executes actions itself; assigned agents do.
 
 pub mod api;
+pub mod config;
 pub mod hub;
 pub mod store;
 
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use tokio::net::TcpListener;
 
@@ -26,12 +27,51 @@ pub fn default_data_dir() -> PathBuf {
         .join("firefight")
 }
 
+/// Optional start-up inputs, typically supplied by a service manager.
+#[derive(Debug, Default)]
+pub struct Options {
+    /// Use this admin token instead of the one generated in the data directory.
+    pub admin_token_file: Option<PathBuf>,
+    /// Shared key that auto-approves agents presenting it.
+    pub enroll_key_file: Option<PathBuf>,
+    /// Declarative timers and assignments, see [`config`].
+    pub config: Option<PathBuf>,
+}
+
 /// Load state and build the shared application state.
 pub fn init(data_dir: &Path) -> Result<AppState> {
+    init_with(data_dir, &Options::default())
+}
+
+pub fn init_with(data_dir: &Path, opts: &Options) -> Result<AppState> {
+    // Fail before touching state if the config is invalid.
+    let declared = match &opts.config {
+        Some(path) => {
+            Some(config::DeclaredConfig::load(path)?.resolve().with_context(|| format!("in {}", path.display()))?)
+        }
+        None => None,
+    };
     let store = Store::open(data_dir)?;
-    let admin_token = store::load_or_create_admin_token(data_dir)?;
-    let hub = Hub::new(store, Utc::now());
+    let admin_token = match &opts.admin_token_file {
+        Some(path) => read_secret(path)?,
+        None => store::load_or_create_admin_token(data_dir)?,
+    };
+    let mut hub = Hub::new(store, Utc::now());
+    hub.set_enroll_key(opts.enroll_key_file.as_deref().map(read_secret).transpose()?);
+    if let Some(declared) = declared {
+        hub.apply_config(declared, Utc::now());
+    }
     Ok(AppState { hub: Arc::new(Mutex::new(hub)), admin_token: Arc::new(admin_token) })
+}
+
+/// Read a secret from a file, ignoring surrounding whitespace.
+fn read_secret(path: &Path) -> Result<String> {
+    let s = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let s = s.trim();
+    if s.is_empty() {
+        bail!("{} is empty", path.display());
+    }
+    Ok(s.to_string())
 }
 
 /// Serve the API on `listener` until the process exits.

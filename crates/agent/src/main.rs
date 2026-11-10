@@ -5,8 +5,8 @@ use firefight_agent::config::{self, AgentConfig};
 use firefight_core::DEFAULT_AGENT_UI_PORT;
 use tokio::net::TcpListener;
 
-const USAGE: &str =
-    "usage: firefight-agent [--server <host:port>] [--name <name>] [--ui-port <port>] [--config <path>]";
+const USAGE: &str = "usage: firefight-agent [--server <host:port>] [--name <name>] [--ui-port <port>] \
+[--config <path>] [--enroll-key-file <path>]";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,6 +16,7 @@ async fn main() -> Result<()> {
 
     let (mut server, mut name, mut ui_port) = (None, None, None);
     let mut config_path = config::default_config_path();
+    let mut enroll_key_file: Option<PathBuf> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -23,6 +24,7 @@ async fn main() -> Result<()> {
             "--name" => name = Some(args.next().context(USAGE)?),
             "--ui-port" => ui_port = Some(args.next().context(USAGE)?.parse().context("invalid --ui-port")?),
             "--config" => config_path = PathBuf::from(args.next().context(USAGE)?),
+            "--enroll-key-file" => enroll_key_file = Some(PathBuf::from(args.next().context(USAGE)?)),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -40,6 +42,7 @@ async fn main() -> Result<()> {
             ui_port: DEFAULT_AGENT_UI_PORT,
             client_id: None,
             token: None,
+            enroll_key: None,
         },
     };
     if let Some(s) = server {
@@ -57,6 +60,10 @@ async fn main() -> Result<()> {
         cfg.ui_port = p;
     }
     cfg.save(&config_path)?;
+    if let Some(path) = enroll_key_file {
+        let key = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        cfg.enroll_key = Some(key.trim().to_string()).filter(|k| !k.is_empty());
+    }
 
     let ui_addr = format!("127.0.0.1:{}", cfg.ui_port);
     let ui = TcpListener::bind(&ui_addr).await.with_context(|| format!("binding {ui_addr}"))?;

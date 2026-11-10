@@ -154,6 +154,7 @@ async fn session(agent: &Agent, outbox: &mut mpsc::UnboundedReceiver<AgentMsg>) 
             token: cfg.token.clone(),
             hostname: config::hostname(),
             name: cfg.name.clone(),
+            enroll_key: cfg.enroll_key.clone(),
         };
         (cfg.agent_ws_url(), hello)
     };

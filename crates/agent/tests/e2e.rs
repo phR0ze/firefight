@@ -19,8 +19,15 @@ struct Env {
 
 impl Env {
     async fn start() -> Self {
+        Self::start_with(|_| (firefight_server::Options::default(), None)).await
+    }
+
+    /// `setup` gets the test directory and returns the server options and the agent's enroll key.
+    async fn start_with(setup: impl FnOnce(&PathBuf) -> (firefight_server::Options, Option<String>)) -> Self {
         let dir = std::env::temp_dir().join(format!("firefight-e2e-{}", Uuid::new_v4()));
-        let state = firefight_server::init(&dir.join("server")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (opts, enroll_key) = setup(&dir);
+        let state = firefight_server::init_with(&dir.join("server"), &opts).unwrap();
         let token = state.admin_token.to_string();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -32,6 +39,7 @@ impl Env {
             ui_port: 0,
             client_id: None,
             token: None,
+            enroll_key,
         };
         let ui = TcpListener::bind("127.0.0.1:0").await.unwrap();
         tokio::spawn(firefight_agent::run(cfg, Some(dir.join("agent.toml")), ui));
@@ -166,4 +174,45 @@ async fn unassigned_agent_does_not_run_actions() {
     env.send(reqwest::Method::POST, &format!("/timers/{}/start", timer["id"].as_str().unwrap()), json!({})).await;
     tokio::time::sleep(Duration::from_millis(1800)).await;
     assert!(!marker.exists());
+}
+
+#[tokio::test]
+async fn preconfigured_server_and_agent_need_no_manual_steps() {
+    let env = Env::start_with(|dir| {
+        std::fs::write(dir.join("admin_token"), "admin-from-file\n").unwrap();
+        std::fs::write(dir.join("enroll_key"), "enroll-from-file\n").unwrap();
+        let marker = dir.join("fired");
+        let config = json!({
+            "timers": [{
+                "key": "e2e",
+                "name": "Declared",
+                "kind": { "type": "countdown", "duration_secs": 1 },
+                "actions": [{ "kind": { "type": "command", "cmd": format!("touch '{}'", marker.display()) } }]
+            }],
+            "assignments": { "test-agent": ["e2e"] }
+        });
+        std::fs::write(dir.join("config.json"), config.to_string()).unwrap();
+        let opts = firefight_server::Options {
+            admin_token_file: Some(dir.join("admin_token")),
+            enroll_key_file: Some(dir.join("enroll_key")),
+            config: Some(dir.join("config.json")),
+        };
+        (opts, Some("enroll-from-file".into()))
+    })
+    .await;
+    assert_eq!(env.token, "admin-from-file", "admin token comes from the file, trimmed");
+
+    let timer_id = firefight_server::config::timer_id("e2e");
+    let client = env
+        .wait_for("enrolled client with its declared timer", async || {
+            let clients: Vec<ClientView> = env.get("/clients").await;
+            clients.into_iter().find(|c| c.online && c.assigned_timers.contains(&timer_id))
+        })
+        .await;
+    assert_eq!(client.status, ClientStatus::Approved, "approved by the enrollment key");
+
+    // Let the assignment reach the agent, then run the declared timer.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    env.send(reqwest::Method::POST, &format!("/timers/{timer_id}/start"), json!({})).await;
+    env.wait_for("declared command to run", async || env.dir.join("fired").exists().then_some(())).await;
 }

@@ -28,6 +28,19 @@ pub fn default_allow_client_dismiss() -> bool {
     true
 }
 
+impl TimerDef {
+    /// Checks shared by the admin API and the server's declarative config.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("name is required".into());
+        }
+        if let TimerKind::Countdown { duration_secs: 0 } = self.kind {
+            return Err("duration must be greater than zero".into());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TimerKind {

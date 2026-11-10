@@ -87,6 +87,8 @@
         cmake                             # Flutter Linux desktop build system
         ninja                             # Flutter Linux desktop build backend
         gtk3                              # Flutter Linux desktop embedder toolkit
+        libx11                            # tray_manager/window_manager native code (nativeapi)
+        libxi                             # tray_manager/window_manager native code (nativeapi)
 
         # Android build dependencies
         jdk17                             # Gradle / Android Gradle Plugin runtime
@@ -129,6 +131,19 @@
         export ANDROID_SDK_ROOT="$WRITABLE_SDK"
         export JAVA_HOME="${pkgs.jdk17}"
         export PATH="$WRITABLE_SDK/platform-tools:$PATH"
+        # Dart build hooks (e.g. nativeapi's, behind tray_manager/window_manager) run with a filtered
+        # environment that drops PKG_CONFIG_PATH, so give them a pkg-config that restores this
+        # shell's search path.
+        PKGCFG_BIN="$HOME/.cache/firefight-devshell/bin"
+        mkdir -p "$PKGCFG_BIN"
+        REAL_PKG_CONFIG="$(command -v pkg-config)"
+        if [ "$REAL_PKG_CONFIG" != "$PKGCFG_BIN/pkg-config" ]; then
+          printf '#!/bin/sh\nexport PKG_CONFIG_PATH="%s''${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"\nexec %s "$@"\n' \
+            "$PKG_CONFIG_PATH" "$REAL_PKG_CONFIG" > "$PKGCFG_BIN/pkg-config"
+          chmod +x "$PKGCFG_BIN/pkg-config"
+        fi
+        export PATH="$PKGCFG_BIN:$PATH"
+
         # Gradle downloads a dynamically linked aapt2 that cannot run on NixOS; use the SDK's.
         export GRADLE_OPTS="-Dorg.gradle.project.android.aapt2FromMavenOverride=$WRITABLE_SDK/build-tools/${androidBuildTools}/aapt2"
 

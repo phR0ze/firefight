@@ -1,22 +1,33 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import 'client/client_page.dart';
+import 'client/tray.dart';
 import 'deck/deck_page.dart';
 import 'settings.dart';
 import 'theme.dart';
 
 /// Arguments: `--mode=server|client`, `--server=<host:port>`, `--token=<admin token>`,
-/// `--agent-port=<port>`. Values given here are remembered for the next launch.
+/// `--token-file=<path>`, `--agent-port=<port>`. Values given here are remembered for the next
+/// launch. The Linux client display lives in the system tray: `--start-hidden` starts it there,
+/// `--no-tray` makes closing the window quit as usual.
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = (await AppSettings.load())..applyArgs(args);
   settings.adminToken ??= AppSettings.localAdminToken();
-  runApp(FirefightApp(settings: settings));
+  final tray = Platform.isLinux && settings.mode == AppMode.client && !args.contains('--no-tray')
+      ? ClientTray.start(startHidden: args.contains('--start-hidden'))
+      : null;
+  runApp(FirefightApp(settings: settings, tray: tray));
 }
 
 class FirefightApp extends StatefulWidget {
-  const FirefightApp({super.key, required this.settings});
+  const FirefightApp({super.key, required this.settings, this.tray});
   final AppSettings settings;
+
+  /// Present when the client display runs in the system tray.
+  final ClientTray? tray;
 
   @override
   State<FirefightApp> createState() => _FirefightAppState();
@@ -65,6 +76,7 @@ class _FirefightAppState extends State<FirefightApp> {
                 key: ValueKey(generation),
                 agentPort: settings.agentPort,
                 onSettings: _openSettings,
+                onFiring: widget.tray?.show,
               ),
             },
     );

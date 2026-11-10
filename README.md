@@ -12,6 +12,7 @@ never runs actions itself.
   - [Components](#components)
   - [Getting started](#getting-started)
   - [Android control deck](#android-control-deck)
+  - [Pre-configured deployment](#pre-configured-deployment)
   - [Running as services](#running-as-services)
   - [Security model](#security-model)
 - [Development](#development)
@@ -80,6 +81,11 @@ cargo build --release
 
 Settings passed on the command line are remembered in `~/.config/firefight/app.json`.
 
+The client display lives in the system tray: closing its window hides it (the tray menu's **Show** brings
+it back, **Quit** exits), and it comes to the front by itself when one of its timers starts firing. Start it
+with `--start-hidden` to go straight to the tray, or `--no-tray` to make closing the window quit. The tray
+needs a panel that hosts StatusNotifierItems (most do; GNOME needs the AppIndicator extension).
+
 ### Android control deck
 
 The Android app is the same control deck as the Linux one. It talks to the same server, so timers, clients
@@ -97,6 +103,42 @@ server's data directory. On a phone, timers and clients are on separate tabs: as
 **Assign timers…** in a client's ⋮ menu (or long-press and drag a timer card where both are visible).
 Like the Linux deck, it uses plain HTTP, so use it only on a trusted LAN.
 
+### Pre-configured deployment
+
+For fleets set up by configuration management (a NixOS module lives in
+[nixos-config](https://github.com/phR0ze/nixos-config) under `modules/apps/system/firefight`), every
+piece can start already connected and keyed:
+
+| Flag                                   | Effect                                                                         |
+|----------------------------------------|--------------------------------------------------------------------------------|
+| `firefight-server --admin-token-file`  | Use this admin token instead of generating one in the data directory           |
+| `firefight-server --enroll-key-file`   | Agents presenting this shared key are approved automatically                   |
+| `firefight-server --config`            | Declarative timers and assignments (below)                                     |
+| `firefight-agent --enroll-key-file`    | Present the shared key, so no manual approval is needed                        |
+| `firefight --token-file=<path>`        | Control deck reads the admin token from a file instead of the command line     |
+
+The `--config` file declares timers by a stable `key` (the timer id is derived from it) and which timers
+each client gets, by the client's name:
+
+```json
+{
+  "timers": [{
+    "key": "lab-closes",
+    "name": "Lab closes",
+    "kind": { "type": "countdown", "duration_secs": 900 },
+    "actions": [{ "kind": { "type": "command", "cmd": "loginctl lock-session" }, "mode": "after_previous" }],
+    "allow_client_dismiss": false
+  }],
+  "assignments": { "Front desk": ["lab-closes"] }
+}
+```
+
+Declared timers are managed: every server start rewrites them (edits made in the deck don't survive a
+restart), and a timer removed from the file is deleted. Assignments work the same way for the timers the
+file gives each client name. Timers created and assignments made in the deck are left alone.
+`kind` and `actions` use the same JSON as the admin API (`at_time` timers take `"time": "HH:MM"` and a
+`repeat`).
+
 ### Running as services
 
 Example systemd user units are in [`contrib/systemd`](contrib/systemd). The agent unit runs inside the
@@ -111,6 +153,9 @@ privileges must be granted explicitly (polkit rule or sudoers entry). The agent 
 * New agents start as *pending* and receive nothing until approved. On approval the server issues a
   per-client token; only its SHA-256 hash is stored on the server. A client removed from the deck loses
   its token immediately.
+* With `--enroll-key-file`, anyone holding the enrollment key can add an approved client, so treat it
+  like the admin token. Removing a client in the deck still revokes it; it can only come back by
+  enrolling again with the key.
 * The admin API requires the admin token (`Authorization: Bearer`).
 * v1 traffic is plain HTTP/WebSocket (no TLS) and is intended for a trusted LAN only.
 * The agent's display socket only listens on `127.0.0.1`.

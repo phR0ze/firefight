@@ -8,16 +8,35 @@ import '../widgets/timer_card.dart';
 /// Display for a client machine: shows the timers assigned to it by the server,
 /// as reported by the local firefight-agent.
 class ClientPage extends StatefulWidget {
-  const ClientPage({super.key, required this.agentPort, required this.onSettings});
+  const ClientPage({super.key, required this.agentPort, required this.onSettings, this.onFiring});
   final int agentPort;
   final VoidCallback onSettings;
+
+  /// Called when an assigned timer starts firing, e.g. to bring a tray-hidden window forward.
+  final VoidCallback? onFiring;
 
   @override
   State<ClientPage> createState() => _ClientPageState();
 }
 
 class _ClientPageState extends State<ClientPage> {
-  late final store = AgentStore(port: widget.agentPort)..connect();
+  late final store = AgentStore(port: widget.agentPort)
+    ..addListener(_checkFiring)
+    ..connect();
+
+  /// Runs seen firing, so each run alerts once.
+  final _firing = <String>{};
+
+  void _checkFiring() {
+    final now = {
+      for (final r in store.runs.values)
+        if (r.state == RunState.firing) r.runId,
+    };
+    if (now.difference(_firing).isNotEmpty) widget.onFiring?.call();
+    _firing
+      ..clear()
+      ..addAll(now);
+  }
 
   @override
   void dispose() {

@@ -117,19 +117,15 @@ struct TimerDraft {
 
 impl TimerDraft {
     fn into_def(self, id: TimerId) -> Result<TimerDef, ApiError> {
-        if self.name.trim().is_empty() {
-            return Err(ApiError(StatusCode::BAD_REQUEST, "name is required".into()));
-        }
-        if let TimerKind::Countdown { duration_secs: 0 } = self.kind {
-            return Err(ApiError(StatusCode::BAD_REQUEST, "duration must be greater than zero".into()));
-        }
-        Ok(TimerDef {
+        let def = TimerDef {
             id,
             name: self.name.trim().to_string(),
             kind: self.kind,
             actions: self.actions,
             allow_client_dismiss: self.allow_client_dismiss,
-        })
+        };
+        def.validate().map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+        Ok(def)
     }
 }
 
@@ -206,7 +202,7 @@ async fn rename_client(
     Path(id): Path<ClientId>,
     Json(body): Json<Rename>,
 ) -> ApiResult<ClientView> {
-    Ok(Json(s.hub().rename_client(id, body.name)?))
+    Ok(Json(s.hub().rename_client(id, body.name, Utc::now())?))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -304,12 +300,12 @@ async fn agent_session(s: AppState, mut socket: WebSocket) {
         Ok(Some(Ok(Message::Text(t)))) => serde_json::from_str::<AgentMsg>(&t).ok(),
         _ => None,
     };
-    let Some(AgentMsg::Hello { client_id, token, hostname, name }) = hello else {
+    let Some(AgentMsg::Hello { client_id, token, hostname, name, enroll_key }) = hello else {
         let _ = socket.send(to_msg(&ServerMsg::Rejected { reason: "expected hello".into() })).await;
         return;
     };
 
-    let outcome = s.hub().agent_hello(client_id, token, hostname, name, Utc::now());
+    let outcome = s.hub().agent_hello(client_id, token, hostname, name, enroll_key, Utc::now());
     let (id, conn_id, mut rx) = match outcome {
         HelloOutcome::Accepted { client_id, conn_id, rx } => (client_id, conn_id, rx),
         HelloOutcome::Rejected(reason) => {

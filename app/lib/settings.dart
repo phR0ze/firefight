@@ -68,7 +68,9 @@ class AppSettings {
     if (!Platform.isAndroid) await Process.run('chmod', ['600', f.path]);
   }
 
-  /// Apply `--mode=`, `--server=`, `--token=` and `--agent-port=` overrides.
+  /// Apply `--mode=`, `--server=`, `--token=`, `--token-file=` and `--agent-port=` overrides.
+  /// `--token-file` reads the token from a file (e.g. a deployed secret) so it stays out of the
+  /// process arguments.
   void applyArgs(List<String> args) {
     for (final a in args) {
       final i = a.indexOf('=');
@@ -81,6 +83,13 @@ class AppSettings {
           server = v;
         case 'token':
           adminToken = v;
+        case 'token-file':
+          try {
+            final t = File(v).readAsStringSync().trim();
+            if (t.isNotEmpty) adminToken = t;
+          } on FileSystemException {
+            // Leave the saved token; the deck will report it can't authenticate.
+          }
         case 'agent-port':
           agentPort = int.tryParse(v) ?? agentPort;
       }

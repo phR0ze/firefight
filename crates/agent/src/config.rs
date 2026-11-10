@@ -22,6 +22,9 @@ pub struct AgentConfig {
     pub client_id: Option<ClientId>,
     /// Issued by the server once the client is approved.
     pub token: Option<String>,
+    /// Shared enrollment key from `--enroll-key-file`; never written to the config file.
+    #[serde(skip)]
+    pub enroll_key: Option<String>,
 }
 
 fn default_ui_port() -> u16 {
@@ -77,7 +80,14 @@ mod tests {
     use super::*;
 
     fn cfg(server: &str) -> AgentConfig {
-        AgentConfig { server: server.into(), name: "n".into(), ui_port: 1, client_id: None, token: None }
+        AgentConfig {
+            server: server.into(),
+            name: "n".into(),
+            ui_port: 1,
+            client_id: None,
+            token: None,
+            enroll_key: None,
+        }
     }
 
     #[test]

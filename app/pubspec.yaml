@@ -11,8 +11,10 @@ dependencies:
     sdk: flutter
   http: ^1.6.0
   path_provider: ^2.1.6
+  tray_manager: ^0.8.3
   uuid: ^4.6.0
   web_socket_channel: ^3.0.3
+  window_manager: ^0.6.0
 
 dev_dependencies:
   flutter_test:
@@ -21,3 +23,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/tray_icon.png

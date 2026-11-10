@@ -16,6 +16,10 @@ pub enum AgentMsg {
         token: Option<String>,
         hostname: String,
         name: String,
+        /// Shared enrollment key; when it matches the server's, the client is approved
+        /// without a manual step in the control deck.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enroll_key: Option<String>,
     },
     ActionResult {
         result: ActionResult,
@@ -110,4 +114,26 @@ pub enum UiEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiMsg {
     Dismiss { timer_id: TimerId },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hello_enroll_key_is_optional_on_the_wire() {
+        // Agents without the field still parse, and it's omitted when unset.
+        let old = r#"{"type":"hello","client_id":null,"token":null,"hostname":"h","name":"n"}"#;
+        let AgentMsg::Hello { enroll_key, .. } = serde_json::from_str(old).unwrap() else { panic!() };
+        assert_eq!(enroll_key, None);
+        let hello = |enroll_key| AgentMsg::Hello {
+            client_id: None,
+            token: None,
+            hostname: "h".into(),
+            name: "n".into(),
+            enroll_key,
+        };
+        assert!(!serde_json::to_string(&hello(None)).unwrap().contains("enroll_key"));
+        assert!(serde_json::to_string(&hello(Some("k".into()))).unwrap().contains(r#""enroll_key":"k""#));
+    }
 }
