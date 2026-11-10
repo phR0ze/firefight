@@ -34,7 +34,7 @@ pub struct Options {
     pub admin_token_file: Option<PathBuf>,
     /// Shared key that auto-approves agents presenting it.
     pub enroll_key_file: Option<PathBuf>,
-    /// Declarative timers and assignments, see [`config`].
+    /// Declarative timers, see [`config`].
     pub config: Option<PathBuf>,
 }
 

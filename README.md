@@ -113,12 +113,11 @@ piece can start already connected and keyed:
 |----------------------------------------|--------------------------------------------------------------------------------|
 | `firefight-server --admin-token-file`  | Use this admin token instead of generating one in the data directory           |
 | `firefight-server --enroll-key-file`   | Agents presenting this shared key are approved automatically                   |
-| `firefight-server --config`            | Declarative timers and assignments (below)                                     |
+| `firefight-server --config`            | Declarative timers (below)                                                     |
 | `firefight-agent --enroll-key-file`    | Present the shared key, so no manual approval is needed                        |
 | `firefight --token-file=<path>`        | Control deck reads the admin token from a file instead of the command line     |
 
-The `--config` file declares timers by a stable `key` (the timer id is derived from it) and which timers
-each client gets, by the client's name:
+The `--config` file declares timers by a stable `key` (the timer id is derived from it):
 
 ```json
 {
@@ -128,14 +127,13 @@ each client gets, by the client's name:
     "kind": { "type": "countdown", "duration_secs": 900 },
     "actions": [{ "kind": { "type": "command", "cmd": "loginctl lock-session" }, "mode": "after_previous" }],
     "allow_client_dismiss": false
-  }],
-  "assignments": { "Front desk": ["lab-closes"] }
+  }]
 }
 ```
 
 Declared timers are managed: every server start rewrites them (edits made in the deck don't survive a
-restart), and a timer removed from the file is deleted. Assignments work the same way for the timers the
-file gives each client name. Timers created and assignments made in the deck are left alone.
+restart), and a timer removed from the file is deleted. Which clients get them is up to the control deck:
+the config never assigns or unassigns anything, and timers created in the deck are left alone.
 `kind` and `actions` use the same JSON as the admin API (`at_time` timers take `"time": "HH:MM"` and a
 `repeat`).
 

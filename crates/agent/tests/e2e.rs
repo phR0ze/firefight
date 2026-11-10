@@ -188,8 +188,7 @@ async fn preconfigured_server_and_agent_need_no_manual_steps() {
                 "name": "Declared",
                 "kind": { "type": "countdown", "duration_secs": 1 },
                 "actions": [{ "kind": { "type": "command", "cmd": format!("touch '{}'", marker.display()) } }]
-            }],
-            "assignments": { "test-agent": ["e2e"] }
+            }]
         });
         std::fs::write(dir.join("config.json"), config.to_string()).unwrap();
         let opts = firefight_server::Options {
@@ -203,15 +202,20 @@ async fn preconfigured_server_and_agent_need_no_manual_steps() {
     assert_eq!(env.token, "admin-from-file", "admin token comes from the file, trimmed");
 
     let timer_id = firefight_server::config::timer_id("e2e");
+    let timers: Vec<TimerDef> = env.get("/timers").await;
+    assert!(timers.iter().any(|t| t.id == timer_id && t.name == "Declared"), "declared timer created");
+
     let client = env
-        .wait_for("enrolled client with its declared timer", async || {
+        .wait_for("enrolled client", async || {
             let clients: Vec<ClientView> = env.get("/clients").await;
-            clients.into_iter().find(|c| c.online && c.assigned_timers.contains(&timer_id))
+            clients.into_iter().find(|c| c.online && c.status == ClientStatus::Approved)
         })
         .await;
-    assert_eq!(client.status, ClientStatus::Approved, "approved by the enrollment key");
+    assert!(client.assigned_timers.is_empty(), "the config assigns nothing; that's the deck's job");
 
-    // Let the assignment reach the agent, then run the declared timer.
+    // Assign it as the deck would, let the assignment reach the agent, then run the timer.
+    env.send(reqwest::Method::PUT, &format!("/clients/{}/assignments", client.id), json!({ "timers": [timer_id] }))
+        .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     env.send(reqwest::Method::POST, &format!("/timers/{timer_id}/start"), json!({})).await;
     env.wait_for("declared command to run", async || env.dir.join("fired").exists().then_some(())).await;

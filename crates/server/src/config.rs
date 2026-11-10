@@ -1,10 +1,9 @@
-//! Declarative server config (`--config`): timers and per-client-name assignments managed from
-//! outside the control deck, e.g. by a NixOS module.
+//! Declarative server config (`--config`): timers managed from outside the control deck, e.g. by
+//! a NixOS module. Which clients get them is still decided in the deck.
 //!
 //! Declared timers are identified by a stable `key` rather than a UUID; the timer id is derived
 //! from it, so the same key always maps to the same timer across restarts and machines.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -23,9 +22,6 @@ const TIMER_NAMESPACE: Uuid = Uuid::from_u128(0x6a1f_0c2e_93d4_4b8e_9f21_5c7a_d0
 pub struct DeclaredConfig {
     #[serde(default)]
     pub timers: Vec<DeclaredTimer>,
-    /// Client name (as the agent reports it) -> timer keys assigned to it.
-    #[serde(default)]
-    pub assignments: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,7 +48,6 @@ pub struct DeclaredAction {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Resolved {
     pub timers: Vec<TimerDef>,
-    pub assignments: HashMap<String, Vec<TimerId>>,
 }
 
 pub fn timer_id(key: &str) -> TimerId {
@@ -91,21 +86,7 @@ impl DeclaredConfig {
             def.validate().map_err(|e| anyhow::anyhow!("timer {:?}: {e}", t.key))?;
             timers.push(def);
         }
-        let mut assignments = HashMap::new();
-        for (client, keys) in self.assignments {
-            let mut ids = Vec::with_capacity(keys.len());
-            for key in keys {
-                let id = timer_id(&key);
-                if !timers.iter().any(|d| d.id == id) {
-                    bail!("assignment for {client:?} names undeclared timer {key:?}");
-                }
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-            assignments.insert(client, ids);
-        }
-        Ok(Resolved { timers, assignments })
+        Ok(Resolved { timers })
     }
 }
 
@@ -121,8 +102,7 @@ mod tests {
     fn resolves_stable_ids_and_defaults() {
         let r = parse(
             r#"{"timers":[{"key":"lab","name":"Lab closes","kind":{"type":"countdown","duration_secs":900},
-                "actions":[{"kind":{"type":"command","cmd":"true"}}]}],
-                "assignments":{"Front desk":["lab","lab"]}}"#,
+                "actions":[{"kind":{"type":"command","cmd":"true"}}]}]}"#,
         )
         .unwrap();
         let t = &r.timers[0];
@@ -130,7 +110,6 @@ mod tests {
         assert_eq!(t.id, timer_id("lab"), "deterministic");
         assert!(t.allow_client_dismiss);
         assert_eq!(t.actions[0].mode, ActionMode::Parallel);
-        assert_eq!(r.assignments["Front desk"], vec![t.id], "duplicates collapsed");
         // Action ids are stable too.
         assert_eq!(
             parse(
@@ -152,8 +131,8 @@ mod tests {
         assert!(parse(dup).unwrap_err().to_string().contains("declared twice"));
         let zero = r#"{"timers":[{"key":"a","name":"a","kind":{"type":"countdown","duration_secs":0}}]}"#;
         assert!(parse(zero).unwrap_err().to_string().contains("duration"));
-        let missing = r#"{"assignments":{"c":["nope"]}}"#;
-        assert!(parse(missing).unwrap_err().to_string().contains("undeclared"));
         assert!(serde_json::from_str::<DeclaredConfig>(r#"{"timerz":[]}"#).is_err(), "typos are errors");
+        // Assignments are made in the control deck, not in the config.
+        assert!(serde_json::from_str::<DeclaredConfig>(r#"{"assignments":{}}"#).is_err());
     }
 }

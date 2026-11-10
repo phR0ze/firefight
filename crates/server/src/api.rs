@@ -202,7 +202,7 @@ async fn rename_client(
     Path(id): Path<ClientId>,
     Json(body): Json<Rename>,
 ) -> ApiResult<ClientView> {
-    Ok(Json(s.hub().rename_client(id, body.name, Utc::now())?))
+    Ok(Json(s.hub().rename_client(id, body.name)?))
 }
 
 #[derive(Serialize, Deserialize)]

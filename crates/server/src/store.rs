@@ -1,6 +1,5 @@
 //! Persisted server state: timer definitions, clients and their assignments.
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -33,9 +32,6 @@ pub struct Persisted {
     /// Timers last put here by the declarative config, so ones dropped from it get deleted.
     #[serde(default)]
     pub managed_timers: Vec<TimerId>,
-    /// Client name -> timers the declarative config last assigned to that name.
-    #[serde(default)]
-    pub managed_assignments: HashMap<String, Vec<TimerId>>,
 }
 
 pub struct Store {

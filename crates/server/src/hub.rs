@@ -33,8 +33,6 @@ pub struct Hub {
     completed: HashMap<TimerId, (RunId, HashSet<ClientId>)>,
     /// Shared key that auto-approves agents presenting it.
     enroll_key: Option<String>,
-    /// Client name -> timers the declarative config assigns to it.
-    declared_assignments: HashMap<String, Vec<TimerId>>,
     admin_tx: broadcast::Sender<AdminEvent>,
 }
 
@@ -71,7 +69,6 @@ impl Hub {
             last_results: HashMap::new(),
             completed: HashMap::new(),
             enroll_key: None,
-            declared_assignments: HashMap::new(),
             admin_tx,
         };
         let defs = hub.store.data.timers.clone();
@@ -305,7 +302,6 @@ impl Hub {
         }
         c.status = ClientStatus::Approved;
         self.save();
-        self.reconcile_assignments(id, &[], now);
         if self.agents.contains_key(&id) {
             self.issue_token(id);
             self.push_assigned(id, now);
@@ -340,13 +336,9 @@ impl Hub {
         Ok(())
     }
 
-    pub fn rename_client(&mut self, id: ClientId, name: String, now: DateTime<Utc>) -> Result<ClientView> {
-        let c = self.store.client_mut(id).ok_or_else(|| anyhow!("no such client"))?;
-        let old_name = std::mem::replace(&mut c.name, name);
+    pub fn rename_client(&mut self, id: ClientId, name: String) -> Result<ClientView> {
+        self.store.client_mut(id).ok_or_else(|| anyhow!("no such client"))?.name = name;
         self.save();
-        // Swap config-declared timers of the old name for those of the new one.
-        let old = self.declared_assignments.get(&old_name).cloned().unwrap_or_default();
-        self.reconcile_assignments(id, &old, now);
         self.emit_client(id);
         Ok(self.client_view(self.store.client(id).expect("exists")))
     }
@@ -498,7 +490,6 @@ impl Hub {
         } else {
             self.send_agent(id, ServerMsg::Welcome { client_id: id, status, token: None });
         }
-        self.reconcile_assignments(id, &[], now);
         self.push_assigned(id, now);
         self.emit_client(id);
         HelloOutcome::Accepted { client_id: id, conn_id, rx }
@@ -510,9 +501,9 @@ impl Hub {
         self.enroll_key = key;
     }
 
-    /// Apply the declarative config: declared timers are created or overwritten, timers an earlier
-    /// config declared but this one doesn't are deleted, and clients get the timers declared for
-    /// their name. Timers and assignments made in the deck are left alone.
+    /// Apply the declarative config: declared timers are created or overwritten, and timers an
+    /// earlier config declared but this one doesn't are deleted. Which clients get a timer is left
+    /// to the control deck; timers created in the deck are untouched.
     pub fn apply_config(&mut self, config: Resolved, now: DateTime<Utc>) {
         let declared: Vec<_> = config.timers.iter().map(|t| t.id).collect();
         for def in config.timers {
@@ -525,35 +516,7 @@ impl Hub {
             let _ = self.delete_timer(id, now);
         }
         self.store.data.managed_timers = declared;
-
-        let previous = std::mem::replace(&mut self.store.data.managed_assignments, config.assignments.clone());
-        self.declared_assignments = config.assignments;
         self.save();
-        let clients: Vec<_> = self.store.data.clients.iter().map(|c| (c.id, c.name.clone())).collect();
-        for (id, name) in clients {
-            let old = previous.get(&name).cloned().unwrap_or_default();
-            self.reconcile_assignments(id, &old, now);
-        }
-    }
-
-    /// Bring a client's assignments in line with the config for its name: drop timers the config
-    /// gave it before (`old`) that are no longer declared, and add the declared ones.
-    fn reconcile_assignments(&mut self, id: ClientId, old: &[TimerId], now: DateTime<Utc>) {
-        let Some(c) = self.store.client(id) else { return };
-        let declared = self.declared_assignments.get(&c.name).cloned().unwrap_or_default();
-        let mut timers: Vec<_> =
-            c.assigned_timers.iter().copied().filter(|t| !old.contains(t) || declared.contains(t)).collect();
-        for t in declared {
-            if !timers.contains(&t) && self.store.timer(t).is_some() {
-                timers.push(t);
-            }
-        }
-        if timers != c.assigned_timers {
-            self.store.client_mut(id).expect("exists").assigned_timers = timers;
-            self.save();
-            self.push_assigned(id, now);
-            self.emit_client(id);
-        }
     }
 
     pub fn agent_disconnected(&mut self, id: ClientId, conn_id: Uuid, now: DateTime<Utc>) {
@@ -968,35 +931,40 @@ mod tests {
     }
 
     #[test]
-    fn config_manages_timers_and_assignments() {
+    fn config_manages_timers_but_not_assignments() {
         let mut hub = hub();
         let now = Utc::now();
         hub.set_enroll_key(Some("k".into()));
-        let (desk, _) = hello_as(&mut hub, "Front desk", Some("k"));
+        let (desk, msgs) = hello_as(&mut hub, "Front desk", Some("k"));
+        let token = msgs
+            .iter()
+            .find_map(|m| match m {
+                ServerMsg::Welcome { token: Some(t), .. } => Some(t.clone()),
+                _ => None,
+            })
+            .unwrap();
         let deck_timer = hub.upsert_timer(countdown(30), now);
-        hub.set_assignments(desk, vec![deck_timer.id], now).unwrap();
 
         hub.apply_config(
             declared(
                 r#"{"timers":[
                     {"key":"lab","name":"Lab","kind":{"type":"countdown","duration_secs":60}},
-                    {"key":"old","name":"Old","kind":{"type":"countdown","duration_secs":60}}],
-                   "assignments":{"Front desk":["lab","old"],"Later":["lab"]}}"#,
+                    {"key":"old","name":"Old","kind":{"type":"countdown","duration_secs":60}}]}"#,
             ),
             now,
         );
         let lab = crate::config::timer_id("lab");
         let old = crate::config::timer_id("old");
-        assert_eq!(hub.store.client(desk).unwrap().assigned_timers, vec![deck_timer.id, lab, old]);
+        assert!(hub.store.client(desk).unwrap().assigned_timers.is_empty(), "config assigns nothing");
 
-        // Deck edits to a managed timer are overwritten on the next apply; "old" is dropped and
-        // deleted; the deck-made timer and its assignment survive.
+        // Assignments are made in the deck, declared timers included.
+        hub.set_assignments(desk, vec![deck_timer.id, lab, old], now).unwrap();
+
+        // Re-applying overwrites deck edits to a declared timer and deletes ones no longer declared
+        // (which also drops them from clients), but leaves the rest of the assignments alone.
         hub.upsert_timer(TimerDef { name: "Edited in deck".into(), ..hub.store.timer(lab).unwrap().clone() }, now);
         hub.apply_config(
-            declared(
-                r#"{"timers":[{"key":"lab","name":"Lab","kind":{"type":"countdown","duration_secs":60}}],
-                   "assignments":{"Front desk":["lab"],"Later":["lab"]}}"#,
-            ),
+            declared(r#"{"timers":[{"key":"lab","name":"Lab","kind":{"type":"countdown","duration_secs":60}}]}"#),
             now,
         );
         assert_eq!(hub.store.timer(lab).unwrap().name, "Lab");
@@ -1004,15 +972,13 @@ mod tests {
         assert!(hub.store.timer(deck_timer.id).is_some());
         assert_eq!(hub.store.client(desk).unwrap().assigned_timers, vec![deck_timer.id, lab]);
 
-        // A client enrolling after start-up gets its declared timers on hello.
-        let (later, _) = hello_as(&mut hub, "Later", Some("k"));
-        assert_eq!(hub.store.client(later).unwrap().assigned_timers, vec![lab]);
-
-        // Renaming moves a client onto another name's declared timers.
-        hub.rename_client(later, "Someone else".into(), now).unwrap();
-        assert!(hub.store.client(later).unwrap().assigned_timers.is_empty());
-
-        // Dropping a name from the config removes what it assigned.
+        // Unassigning a declared timer in the deck sticks across reconnects and re-applies.
+        hub.set_assignments(desk, vec![deck_timer.id], now).unwrap();
+        let HelloOutcome::Accepted { .. } =
+            hub.agent_hello(Some(desk), Some(token), "host".into(), "Front desk".into(), None, now)
+        else {
+            panic!("reconnect rejected")
+        };
         hub.apply_config(
             declared(r#"{"timers":[{"key":"lab","name":"Lab","kind":{"type":"countdown","duration_secs":60}}]}"#),
             now,
