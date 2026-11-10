@@ -35,6 +35,30 @@
     };
   in
   {
+    # Run: `nix run .#emulator`
+    # Boots a local Android emulator (KVM accelerated) for trying the control deck; then
+    # `cd app && flutter run` from the dev shell installs and starts the app on it. The
+    # virtual device persists in ~/.local/share/firefight-emulator between runs. Inside the
+    # emulator the host machine, and so a local firefight-server, is reachable at 10.0.2.2.
+    packages.emulator = pkgs.androidenv.emulateApp {
+      name = "firefight-emulator";
+      platformVersion = "35";
+      abiVersion = "x86_64";
+      systemImageType = "default";            # plain AOSP image, no Google apps
+      deviceName = "firefight";
+      # Expanded by the launcher script at runtime, so the device survives between runs.
+      androidUserHome = "$HOME/.local/share/firefight-emulator";
+      androidAvdFlags = "--device pixel_6";
+      configOptions = {
+        "hw.keyboard" = "yes";                # type with the host keyboard
+        "hw.ramSize" = "2048";
+      };
+    };
+    apps.emulator = {
+      type = "app";
+      program = "${self.packages.${system}.emulator}/bin/run-test-emulator";
+    };
+
     devShells.default = pkgs.mkShell {
 
       nativeBuildInputs = with pkgs; [

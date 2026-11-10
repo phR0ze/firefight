@@ -156,3 +156,11 @@ docs/design     UI mockups
    ```bash
    cd app && flutter run -d linux -a --mode=client
    ```
+
+5. Optional: the Android control deck in an emulator (KVM accelerated; the device persists in
+   `~/.local/share/firefight-emulator`)
+   ```bash
+   nix run .#emulator                # boots the emulator, returns once it is ready
+   cd app && flutter run             # installs and starts the app on it, with hot reload
+   ```
+   Inside the emulator the host is `10.0.2.2`, so connect the app to `10.0.2.2:7878`.

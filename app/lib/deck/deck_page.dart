@@ -121,6 +121,8 @@ class _DeckPageState extends State<DeckPage> {
                     onSettings: widget.onSettings,
                   ),
                   const Divider(height: 1),
+                  if (!store.connected && store.error != null)
+                    _ConnectionBanner(server: widget.server, error: store.error!, onSettings: widget.onSettings),
                   Expanded(child: body),
                 ],
               ),
@@ -147,6 +149,41 @@ class _DeckPageState extends State<DeckPage> {
                 : null,
           );
         },
+      ),
+    );
+  }
+}
+
+/// Shown across the deck while the server cannot be reached, since the cards
+/// below then show the last known state and actions on them will fail.
+class _ConnectionBanner extends StatelessWidget {
+  const _ConnectionBanner({required this.server, required this.error, required this.onSettings});
+  final String server;
+  final String error;
+  final VoidCallback onSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final badToken = error == 'invalid admin token';
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF3A1E1E),
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_outlined, size: 20, color: Palette.red),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              badToken
+                  ? 'The server at $server rejected the admin token.'
+                  : "Can't reach the server at $server ($error). Retrying… Changes made now will fail.",
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(onPressed: onSettings, child: const Text('Settings')),
+        ],
       ),
     );
   }
