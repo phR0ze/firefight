@@ -40,6 +40,7 @@
         gnumake                           # A tool to control the generation of non-source files from sources
         pkg-config                        # System dependency path resolution
         openssl                           # Cryptographic implementation of the SSL and TLS protocols
+        alsa-lib                          # Audio output for the agent's sound actions
 
         # Flutter dependencies
         flutter                           # Flutter support and its CLI
@@ -57,7 +58,7 @@
 
       shellHook = ''
         export PATH="$HOME/.cargo/bin:$PATH"
-        echo "firefight dev shell: $(rustc --version), $(flutter --version 2>/dev/null | head -n1)"
+        echo -e "firefight dev shell:\n - $(rustc --version)\n - $(flutter --version 2>/dev/null | head -n1)"
       '';
     };
   });

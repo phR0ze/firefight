@@ -1,0 +1,22 @@
+# systemd user unit for the firefight agent (one per client machine).
+# Runs inside the graphical session so sound and session commands
+# (e.g. `loginctl lock-session`) work.
+#
+# Pair once from a terminal so the server address is saved to
+# ~/.config/firefight/agent.toml:
+#   firefight-agent --server <server-host>:7878
+# then copy this file to ~/.config/systemd/user/ and run
+#   systemctl --user enable --now firefight-agent
+# Adjust ExecStart to where firefight-agent is installed.
+[Unit]
+Description=firefight agent
+After=graphical-session.target network-online.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/firefight-agent
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

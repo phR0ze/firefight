@@ -1,0 +1,16 @@
+# systemd user unit for the firefight server.
+# Install: copy to ~/.config/systemd/user/ and run
+#   systemctl --user enable --now firefight-server
+# Adjust ExecStart to where firefight-server is installed.
+[Unit]
+Description=firefight timer server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/firefight-server
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

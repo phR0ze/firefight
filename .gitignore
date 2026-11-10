@@ -1,2 +1,5 @@
 result
 result-*
+target/
+app/build/
+app/.dart_tool/
