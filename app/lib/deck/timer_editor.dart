@@ -30,6 +30,7 @@ class _TimerEditorState extends State<TimerEditor> {
   _RepeatChoice _repeat = _RepeatChoice.weekdays;
   Set<Weekday> _days = {Weekday.mon};
   late final List<TimerAction> _actions = [...?widget.initial?.actions];
+  late bool _allowClientDismiss = widget.initial?.allowClientDismiss ?? true;
   String? _error;
   String? _testStatus;
 
@@ -106,7 +107,13 @@ class _TimerEditorState extends State<TimerEditor> {
     }
     setState(() => _error = err);
     if (err != null) return null;
-    return TimerDef(id: widget.initial?.id ?? '', name: name, kind: kind, actions: _actions);
+    return TimerDef(
+      id: widget.initial?.id ?? '',
+      name: name,
+      kind: kind,
+      actions: _actions,
+      allowClientDismiss: _allowClientDismiss,
+    );
   }
 
   Future<void> _testRun(ClientView client) async {
@@ -241,6 +248,20 @@ class _TimerEditorState extends State<TimerEditor> {
             ),
           ],
         ],
+        _label('Client display'),
+        CheckboxListTile(
+          value: _allowClientDismiss,
+          onChanged: (v) => setState(() => _allowClientDismiss = v!),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text('Clients can dismiss', style: TextStyle(fontSize: 13)),
+          subtitle: const Text(
+            'When off, the timer returns to idle once every client finishes its actions. '
+            'The control deck can still dismiss it early.',
+            style: TextStyle(color: Palette.muted, fontSize: 12),
+          ),
+        ),
       ],
     );
   }
@@ -295,6 +316,7 @@ class _TimerEditorState extends State<TimerEditor> {
                     index: i,
                     action: a,
                     isLast: i == _actions.length - 1,
+                    canLoop: _allowClientDismiss,
                     onChanged: (a) => _update(i, a),
                     onRemove: () => setState(() => _actions.removeAt(i)),
                     onMoveUp: i == 0 ? null : () => setState(() => _actions.insert(i - 1, _actions.removeAt(i))),
@@ -424,6 +446,7 @@ class _ActionStep extends StatelessWidget {
     required this.index,
     required this.action,
     required this.isLast,
+    required this.canLoop,
     required this.onChanged,
     required this.onRemove,
     required this.onMoveUp,
@@ -431,6 +454,7 @@ class _ActionStep extends StatelessWidget {
   final int index;
   final TimerAction action;
   final bool isLast;
+  final bool canLoop;
   final ValueChanged<TimerAction> onChanged;
   final VoidCallback onRemove;
   final VoidCallback? onMoveUp;
@@ -519,6 +543,7 @@ class _ActionStep extends StatelessWidget {
                     switch (action.kind) {
                       final SoundAction s => _SoundFields(
                         sound: s,
+                        canLoop: canLoop,
                         onChanged: (k) => onChanged(action.copyWith(kind: k)),
                       ),
                       CommandAction(:final cmd) => Padding(
@@ -544,8 +569,12 @@ class _ActionStep extends StatelessWidget {
 }
 
 class _SoundFields extends StatelessWidget {
-  const _SoundFields({required this.sound, required this.onChanged});
+  const _SoundFields({required this.sound, required this.canLoop, required this.onChanged});
   final SoundAction sound;
+
+  /// False when clients cannot dismiss the timer: the sound then plays once so
+  /// the run can finish on its own.
+  final bool canLoop;
   final ValueChanged<SoundAction> onChanged;
 
   static const _custom = '__custom__';
@@ -598,12 +627,18 @@ class _SoundFields extends StatelessWidget {
             ),
           ],
           CheckboxListTile(
-            value: sound.loopUntilDismissed,
-            onChanged: (v) => onChanged(_with(loop: v)),
+            value: canLoop && sound.loopUntilDismissed,
+            onChanged: canLoop ? (v) => onChanged(_with(loop: v)) : null,
             dense: true,
             contentPadding: EdgeInsets.zero,
             controlAffinity: ListTileControlAffinity.leading,
             title: const Text('Loop until dismissed', style: TextStyle(fontSize: 13)),
+            subtitle: canLoop
+                ? null
+                : const Text(
+                    'Plays once: clients cannot dismiss this timer',
+                    style: TextStyle(color: Palette.muted, fontSize: 12),
+                  ),
           ),
         ],
       ),

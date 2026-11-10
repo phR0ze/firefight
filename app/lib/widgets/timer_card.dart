@@ -47,13 +47,7 @@ class _TickingState extends State<Ticking> with SingleTickerProviderStateMixin {
 
 /// Circular progress ring with the remaining time in the middle.
 class TimerRing extends StatelessWidget {
-  const TimerRing({
-    super.key,
-    required this.fraction,
-    required this.color,
-    required this.label,
-    this.size = 96,
-  });
+  const TimerRing({super.key, required this.fraction, required this.color, required this.label, this.size = 96});
   final double fraction;
   final Color color;
   final String label;
@@ -72,11 +66,7 @@ class TimerRing extends StatelessWidget {
             child: FittedBox(
               child: Text(
                 label,
-                style: TextStyle(
-                  fontFamily: monoFamily,
-                  fontWeight: FontWeight.w700,
-                  fontSize: size * 0.22,
-                ),
+                style: TextStyle(fontFamily: monoFamily, fontWeight: FontWeight.w700, fontSize: size * 0.22),
               ),
             ),
           ),
@@ -87,11 +77,7 @@ class TimerRing extends StatelessWidget {
 }
 
 class _RingPainter extends CustomPainter {
-  _RingPainter({
-    required this.fraction,
-    required this.color,
-    required this.stroke,
-  });
+  _RingPainter({required this.fraction, required this.color, required this.stroke});
   final double fraction;
   final Color color;
   final double stroke;
@@ -106,19 +92,12 @@ class _RingPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
     canvas.drawArc(arc, 0, 2 * math.pi, false, paint..color = Palette.track);
     if (fraction > 0) {
-      canvas.drawArc(
-        arc,
-        -math.pi / 2,
-        2 * math.pi * fraction,
-        false,
-        paint..color = color,
-      );
+      canvas.drawArc(arc, -math.pi / 2, 2 * math.pi * fraction, false, paint..color = color);
     }
   }
 
   @override
-  bool shouldRepaint(_RingPainter old) =>
-      old.fraction != fraction || old.color != color || old.stroke != stroke;
+  bool shouldRepaint(_RingPainter old) => old.fraction != fraction || old.color != color || old.stroke != stroke;
 }
 
 class StatusPill extends StatelessWidget {
@@ -130,18 +109,10 @@ class StatusPill extends StatelessWidget {
     final c = pillColors(state);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: c.bg,
-        borderRadius: BorderRadius.circular(6),
-      ),
+      decoration: BoxDecoration(color: c.bg, borderRadius: BorderRadius.circular(6)),
       child: Text(
         state.name.toUpperCase(),
-        style: TextStyle(
-          color: c.fg,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1,
-        ),
+        style: TextStyle(color: c.fg, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
       ),
     );
   }
@@ -149,15 +120,16 @@ class StatusPill extends StatelessWidget {
 
 /// One line of the "ON FINISH" list, e.g. "♪ Gong · loop".
 class ActionLine extends StatelessWidget {
-  const ActionLine(this.action, {super.key});
+  const ActionLine(this.action, {super.key, this.canLoop = true});
   final TimerAction action;
+  final bool canLoop;
 
   @override
   Widget build(BuildContext context) {
     final (icon, text) = switch (action.kind) {
       SoundAction(:final sound, :final loopUntilDismissed) => (
         '♪',
-        '${sound.split('/').last}${loopUntilDismissed ? ' · loop' : ''}',
+        '${sound.split('/').last}${canLoop && loopUntilDismissed ? ' · loop' : ''}',
       ),
       CommandAction(:final cmd) => (r'$', cmd),
     };
@@ -167,18 +139,10 @@ class ActionLine extends StatelessWidget {
         children: [
           SizedBox(
             width: 18,
-            child: Text(
-              icon,
-              style: const TextStyle(color: Palette.amber, fontSize: 12),
-            ),
+            child: Text(icon, style: const TextStyle(color: Palette.amber, fontSize: 12)),
           ),
           Expanded(
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13),
-            ),
+            child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -231,19 +195,10 @@ class TimerCard extends StatelessWidget {
                       def.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      def.subtitle,
-                      style: const TextStyle(
-                        color: Palette.muted,
-                        fontSize: 12,
-                      ),
-                    ),
+                    Text(def.subtitle, style: const TextStyle(color: Palette.muted, fontSize: 12)),
                   ],
                 ),
               ),
@@ -266,8 +221,7 @@ class TimerCard extends StatelessWidget {
                     fraction: r?.fractionAt(now) ?? 0,
                     color: ringColor(state),
                     label: switch (def.kind) {
-                      AtTime(:final time) when state == RunState.idle =>
-                        formatHm(time),
+                      AtTime(:final time) when state == RunState.idle => formatHm(time),
                       _ => formatRemaining(remaining),
                     },
                   );
@@ -278,32 +232,19 @@ class TimerCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'ON FINISH',
-                      style: TextStyle(
-                        color: Palette.muted,
-                        fontSize: 11,
-                        letterSpacing: 1,
-                      ),
-                    ),
+                    const Text('ON FINISH', style: TextStyle(color: Palette.muted, fontSize: 11, letterSpacing: 1)),
                     if (def.actions.isEmpty)
                       const Padding(
                         padding: EdgeInsets.only(top: 6),
-                        child: Text(
-                          'nothing',
-                          style: TextStyle(color: Palette.muted, fontSize: 13),
-                        ),
+                        child: Text('nothing', style: TextStyle(color: Palette.muted, fontSize: 13)),
                       ),
-                    for (final a in def.actions.take(3)) ActionLine(a),
+                    for (final a in def.actions.take(3)) ActionLine(a, canLoop: def.allowClientDismiss),
                     if (def.actions.length > 3)
                       Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: Text(
                           '+${def.actions.length - 3} more',
-                          style: const TextStyle(
-                            color: Palette.muted,
-                            fontSize: 12,
-                          ),
+                          style: const TextStyle(color: Palette.muted, fontSize: 12),
                         ),
                       ),
                   ],

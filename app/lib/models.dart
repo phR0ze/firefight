@@ -163,17 +163,27 @@ class TimerAction {
 }
 
 class TimerDef {
-  const TimerDef({required this.id, required this.name, required this.kind, this.actions = const []});
+  const TimerDef({
+    required this.id,
+    required this.name,
+    required this.kind,
+    this.actions = const [],
+    this.allowClientDismiss = true,
+  });
   final String id;
   final String name;
   final TimerKind kind;
   final List<TimerAction> actions;
+
+  /// Whether client displays may dismiss the timer while it is firing.
+  final bool allowClientDismiss;
 
   factory TimerDef.fromJson(Map<String, dynamic> j) => TimerDef(
     id: j['id'] as String,
     name: j['name'] as String,
     kind: TimerKind.fromJson(j['kind'] as Map<String, dynamic>),
     actions: [for (final a in (j['actions'] as List? ?? [])) TimerAction.fromJson(a as Map<String, dynamic>)],
+    allowClientDismiss: j['allow_client_dismiss'] as bool? ?? true,
   );
 
   /// Body for create/update requests (the server owns the id).
@@ -181,6 +191,7 @@ class TimerDef {
     'name': name,
     'kind': kind.toJson(),
     'actions': [for (final a in actions) a.toJson()],
+    'allow_client_dismiss': allowClientDismiss,
   };
 
   Map<String, dynamic> toJson() => {'id': id, ...toDraftJson()};

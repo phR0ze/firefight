@@ -35,6 +35,7 @@ void main() {
       'name': 'Tea',
       'kind': {'type': 'countdown', 'duration_secs': 240},
       'actions': <dynamic>[],
+      'allow_client_dismiss': true,
     });
   });
 

@@ -90,11 +90,13 @@ void main() {
     expect(find.text('22'), findsOneWidget);
     expect(find.text('30'), findsOneWidget);
     await tester.tap(find.text('Mon'));
+    await tester.tap(find.text('Clients can dismiss'));
     await tester.pump();
     await tester.tap(find.text('Save timer'));
     await tester.pumpAndSettle();
     final def = (await result())!;
     expect(def.id, 'x');
+    expect(def.allowClientDismiss, isFalse);
     expect(((def.kind as AtTime).repeat as RepeatDays).days, {Weekday.mon, Weekday.fri});
   });
 }

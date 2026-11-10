@@ -1,12 +1,12 @@
 //! In-memory coordinator: owns the store, timer runs and live connections, and
 //! fans state changes out to the control deck and to agents.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, anyhow, bail};
 use chrono::{DateTime, Local, Utc};
 use firefight_core::model::{
-    Action, ActionResult, ClientId, ClientStatus, ClientView, Repeat, TimerDef, TimerId, TimerKind,
+    Action, ActionResult, ClientId, ClientStatus, ClientView, Repeat, RunId, TimerDef, TimerId, TimerKind,
 };
 use firefight_core::protocol::{AdminEvent, ServerMsg};
 use firefight_core::run::{RunState, TimerRun};
@@ -28,6 +28,8 @@ pub struct Hub {
     runs: HashMap<TimerId, TimerRun>,
     agents: HashMap<ClientId, Conn>,
     last_results: HashMap<ClientId, ActionResult>,
+    /// Clients that finished all actions of a timer's current run.
+    completed: HashMap<TimerId, (RunId, HashSet<ClientId>)>,
     admin_tx: broadcast::Sender<AdminEvent>,
 }
 
@@ -57,8 +59,14 @@ fn next_at(def: &TimerDef, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
 impl Hub {
     pub fn new(store: Store, now: DateTime<Utc>) -> Self {
         let (admin_tx, _) = broadcast::channel(256);
-        let mut hub =
-            Self { store, runs: HashMap::new(), agents: HashMap::new(), last_results: HashMap::new(), admin_tx };
+        let mut hub = Self {
+            store,
+            runs: HashMap::new(),
+            agents: HashMap::new(),
+            last_results: HashMap::new(),
+            completed: HashMap::new(),
+            admin_tx,
+        };
         let defs = hub.store.data.timers.clone();
         for def in &defs {
             hub.runs.insert(def.id, hub.initial_run(def, now));
@@ -245,6 +253,36 @@ impl Hub {
             }
             self.broadcast_run(id, now);
         }
+        // Also catches clients that disconnected or were unassigned mid-run.
+        self.auto_complete_all(now);
+    }
+
+    /// Timers clients cannot dismiss return to idle on their own once every
+    /// online assigned client has finished the run's actions.
+    fn auto_complete(&mut self, timer_id: TimerId, now: DateTime<Utc>) {
+        if self.store.timer(timer_id).is_none_or(|t| t.allow_client_dismiss) {
+            return;
+        }
+        let Some(run) = self.runs.get(&timer_id).filter(|r| r.state == RunState::Firing) else { return };
+        let done = self.completed.get(&timer_id).filter(|(run_id, _)| *run_id == run.run_id).map(|(_, set)| set);
+        let finished = self
+            .approved_clients_with(timer_id)
+            .filter(|c| self.agents.contains_key(&c.id))
+            .all(|c| done.is_some_and(|set| set.contains(&c.id)));
+        if finished {
+            tracing::info!(timer = %timer_id, run = %run.run_id, "all clients finished; returning to idle");
+            self.completed.remove(&timer_id);
+            if let Err(e) = self.control(timer_id, Control::Dismiss, now) {
+                tracing::warn!("auto dismiss failed: {e}");
+            }
+        }
+    }
+
+    fn auto_complete_all(&mut self, now: DateTime<Utc>) {
+        let ids: Vec<_> = self.runs.values().filter(|r| r.state == RunState::Firing).map(|r| r.timer_id).collect();
+        for id in ids {
+            self.auto_complete(id, now);
+        }
     }
 
     // ---- clients ------------------------------------------------------------
@@ -408,15 +446,31 @@ impl Hub {
         self.emit_client(id);
     }
 
-    /// Dismiss from a client display; only allowed for timers assigned to it.
+    /// Dismiss from a client display; only allowed for timers assigned to it
+    /// that permit client dismissal.
     pub fn agent_dismiss(&mut self, id: ClientId, timer_id: TimerId, now: DateTime<Utc>) {
         let allowed = self
             .store
             .client(id)
-            .is_some_and(|c| c.status == ClientStatus::Approved && c.assigned_timers.contains(&timer_id));
+            .is_some_and(|c| c.status == ClientStatus::Approved && c.assigned_timers.contains(&timer_id))
+            && self.store.timer(timer_id).is_some_and(|t| t.allow_client_dismiss);
         if allowed && let Err(e) = self.control(timer_id, Control::Dismiss, now) {
             tracing::debug!("client dismiss ignored: {e}");
         }
+    }
+
+    /// An agent finished every action of a run. Recorded even if the server has
+    /// not moved the run to `Firing` yet, since the agent may fire first.
+    pub fn agent_run_complete(&mut self, id: ClientId, timer_id: TimerId, run_id: RunId, now: DateTime<Utc>) {
+        if self.runs.get(&timer_id).is_none_or(|r| r.run_id != run_id) {
+            return;
+        }
+        let entry = self.completed.entry(timer_id).or_insert_with(|| (run_id, HashSet::new()));
+        if entry.0 != run_id {
+            *entry = (run_id, HashSet::new());
+        }
+        entry.1.insert(id);
+        self.auto_complete(timer_id, now);
     }
 
     pub fn is_approved(&self, id: ClientId) -> bool {
@@ -473,6 +527,7 @@ mod tests {
                 kind: ActionKind::Command { cmd: "true".into() },
                 mode: ActionMode::Parallel,
             }],
+            allow_client_dismiss: true,
         }
     }
 
@@ -530,6 +585,65 @@ mod tests {
         assert_eq!(hub.runs[&def.id].state, RunState::Firing);
         hub.agent_dismiss(a, def.id, now);
         assert_eq!(hub.runs[&def.id].state, RunState::Idle);
+    }
+
+    #[test]
+    fn client_dismiss_respects_timer_setting() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let def = hub.upsert_timer(TimerDef { allow_client_dismiss: false, ..countdown(60) }, now);
+        let (a, _) = hello(&mut hub, None, None).unwrap();
+        hub.approve_client(a, now).unwrap();
+        hub.set_assignments(a, vec![def.id], now).unwrap();
+
+        hub.control(def.id, Control::Start, now).unwrap();
+        hub.tick(now + chrono::Duration::seconds(61));
+        hub.agent_dismiss(a, def.id, now);
+        assert_eq!(hub.runs[&def.id].state, RunState::Firing);
+        // The control deck can still dismiss it.
+        hub.control(def.id, Control::Dismiss, now).unwrap();
+        assert_eq!(hub.runs[&def.id].state, RunState::Idle);
+    }
+
+    #[test]
+    fn non_dismissable_timer_idles_after_all_clients_complete() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let def = hub.upsert_timer(TimerDef { allow_client_dismiss: false, ..countdown(60) }, now);
+        let (a, _) = hello(&mut hub, None, None).unwrap();
+        let (b, _) = hello(&mut hub, None, None).unwrap();
+        for c in [a, b] {
+            hub.approve_client(c, now).unwrap();
+            hub.set_assignments(c, vec![def.id], now).unwrap();
+        }
+        hub.control(def.id, Control::Start, now).unwrap();
+        let run_id = hub.runs[&def.id].run_id;
+
+        // Agent a finishes before the server's own tick marks the run as firing.
+        hub.agent_run_complete(a, def.id, run_id, now);
+        hub.tick(now + chrono::Duration::seconds(61));
+        assert_eq!(hub.runs[&def.id].state, RunState::Firing, "still waiting on b");
+
+        // A stale completion for another run is ignored.
+        hub.agent_run_complete(b, def.id, Uuid::new_v4(), now);
+        assert_eq!(hub.runs[&def.id].state, RunState::Firing);
+
+        hub.agent_run_complete(b, def.id, run_id, now);
+        assert_eq!(hub.runs[&def.id].state, RunState::Idle);
+    }
+
+    #[test]
+    fn dismissable_timer_keeps_firing_after_completion() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let def = hub.upsert_timer(countdown(60), now);
+        let (a, _) = hello(&mut hub, None, None).unwrap();
+        hub.approve_client(a, now).unwrap();
+        hub.set_assignments(a, vec![def.id], now).unwrap();
+        hub.control(def.id, Control::Start, now).unwrap();
+        hub.tick(now + chrono::Duration::seconds(61));
+        hub.agent_run_complete(a, def.id, hub.runs[&def.id].run_id, now);
+        assert_eq!(hub.runs[&def.id].state, RunState::Firing);
     }
 
     #[test]

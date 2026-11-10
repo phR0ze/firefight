@@ -16,6 +16,9 @@ pub struct Fire {
     pub timer_id: TimerId,
     pub run_id: RunId,
     pub actions: Vec<Action>,
+    /// Sounds may loop only when someone on a client can dismiss them;
+    /// otherwise the run must end on its own.
+    pub allow_loop: bool,
 }
 
 #[derive(Debug)]
@@ -72,7 +75,12 @@ impl AgentState {
             return None;
         }
         let def = self.timers.iter().find(|t| t.id == run.timer_id)?;
-        let fire = Fire { timer_id: def.id, run_id: run.run_id, actions: def.actions.clone() };
+        let fire = Fire {
+            timer_id: def.id,
+            run_id: run.run_id,
+            actions: def.actions.clone(),
+            allow_loop: def.allow_client_dismiss,
+        };
         self.mark_fired(run.run_id);
         Some(fire)
     }
@@ -111,6 +119,11 @@ impl AgentState {
         due.iter().filter_map(|r| self.fire_for(r)).collect()
     }
 
+    /// Whether the local display may dismiss this timer.
+    pub fn can_dismiss(&self, timer_id: TimerId) -> bool {
+        self.timers.iter().any(|t| t.id == timer_id && t.allow_client_dismiss)
+    }
+
     pub fn ui_event(&self, local_now: DateTime<Utc>) -> UiEvent {
         UiEvent::State {
             status: self.status,
@@ -144,6 +157,7 @@ mod tests {
                 kind: ActionKind::Command { cmd: "true".into() },
                 mode: ActionMode::Parallel,
             }],
+            allow_client_dismiss: true,
         };
         let mut run = TimerRun::idle(def.id, 10_000);
         run.start(t(0)).unwrap();

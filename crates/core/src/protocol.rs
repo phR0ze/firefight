@@ -24,6 +24,11 @@ pub enum AgentMsg {
     Dismiss {
         timer_id: TimerId,
     },
+    /// Every action of a fired run has finished on this agent.
+    RunComplete {
+        timer_id: TimerId,
+        run_id: RunId,
+    },
 }
 
 /// Server -> agent.

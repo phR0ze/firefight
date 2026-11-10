@@ -18,6 +18,8 @@ const MAX_MESSAGE: usize = 200;
 pub struct Ctx {
     pub timer_id: Option<TimerId>,
     pub run_id: Option<RunId>,
+    /// Whether "loop until dismissed" sounds may loop.
+    pub allow_loop: bool,
     pub sound: SoundPlayer,
     pub results: mpsc::UnboundedSender<ActionResult>,
 }
@@ -67,8 +69,7 @@ async fn run_action(action: Action, ctx: &Ctx) {
             }
         }
         ActionKind::Sound { sound, volume, loop_until_dismissed } => {
-            // Test runs have no timer to dismiss, so they never loop.
-            let looping = *loop_until_dismissed && ctx.timer_id.is_some();
+            let looping = *loop_until_dismissed && ctx.allow_loop;
             match ctx.sound.play(ctx.timer_id, sound.clone(), *volume, looping).await {
                 Ok(done) => {
                     report(true, None, format!("playing {sound}"));
@@ -129,7 +130,7 @@ mod tests {
 
     async fn run(actions: Vec<Action>) -> Vec<ActionResult> {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let ctx = Ctx { timer_id: None, run_id: None, sound: SoundPlayer::spawn(), results: tx };
+        let ctx = Ctx { timer_id: None, run_id: None, allow_loop: false, sound: SoundPlayer::spawn(), results: tx };
         execute(actions, ctx).await;
         let mut out = vec![];
         while let Ok(r) = rx.try_recv() {

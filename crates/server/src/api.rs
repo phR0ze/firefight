@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
-use firefight_core::model::{Action, ClientId, ClientView, TimerDef, TimerId, TimerKind};
+use firefight_core::model::{Action, ClientId, ClientView, TimerDef, TimerId, TimerKind, default_allow_client_dismiss};
 use firefight_core::protocol::{AgentMsg, ServerMsg};
 use firefight_core::run::TimerRun;
 use serde::{Deserialize, Serialize};
@@ -107,6 +107,8 @@ struct TimerDraft {
     kind: TimerKind,
     #[serde(default)]
     actions: Vec<Action>,
+    #[serde(default = "default_allow_client_dismiss")]
+    allow_client_dismiss: bool,
 }
 
 impl TimerDraft {
@@ -117,7 +119,13 @@ impl TimerDraft {
         if let TimerKind::Countdown { duration_secs: 0 } = self.kind {
             return Err(ApiError(StatusCode::BAD_REQUEST, "duration must be greater than zero".into()));
         }
-        Ok(TimerDef { id, name: self.name.trim().to_string(), kind: self.kind, actions: self.actions })
+        Ok(TimerDef {
+            id,
+            name: self.name.trim().to_string(),
+            kind: self.kind,
+            actions: self.actions,
+            allow_client_dismiss: self.allow_client_dismiss,
+        })
     }
 }
 
@@ -323,6 +331,7 @@ fn handle_agent_msg(s: &AppState, id: ClientId, msg: AgentMsg) {
     match msg {
         AgentMsg::ActionResult { result } => hub.agent_result(id, result),
         AgentMsg::Dismiss { timer_id } => hub.agent_dismiss(id, timer_id, Utc::now()),
+        AgentMsg::RunComplete { timer_id, run_id } => hub.agent_run_complete(id, timer_id, run_id, Utc::now()),
         AgentMsg::Hello { .. } => {}
     }
 }

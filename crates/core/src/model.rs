@@ -18,6 +18,14 @@ pub struct TimerDef {
     /// Actions executed on every assigned client when the timer finishes.
     #[serde(default)]
     pub actions: Vec<Action>,
+    /// Whether client displays may dismiss the timer while it is firing.
+    /// The control deck can always dismiss.
+    #[serde(default = "default_allow_client_dismiss")]
+    pub allow_client_dismiss: bool,
+}
+
+pub fn default_allow_client_dismiss() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,11 +166,19 @@ mod tests {
                     mode: ActionMode::AfterPrevious,
                 },
             ],
+            allow_client_dismiss: false,
         };
         let json = serde_json::to_string(&def).unwrap();
         assert!(json.contains(r#""time":"09:45""#));
         assert!(json.contains(r#""type":"at_time""#));
         assert_eq!(serde_json::from_str::<TimerDef>(&json).unwrap(), def);
+    }
+
+    #[test]
+    fn timer_def_defaults_to_client_dismiss() {
+        let json =
+            r#"{"id":"00000000-0000-0000-0000-000000000000","name":"t","kind":{"type":"countdown","duration_secs":5}}"#;
+        assert!(serde_json::from_str::<TimerDef>(json).unwrap().allow_client_dismiss);
     }
 
     #[test]

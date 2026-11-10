@@ -58,10 +58,15 @@ impl Agent {
         let ctx = Ctx {
             timer_id: Some(fire.timer_id),
             run_id: Some(fire.run_id),
+            allow_loop: fire.allow_loop,
             sound: self.sound.clone(),
             results: self.results.clone(),
         };
-        tokio::spawn(exec::execute(fire.actions, ctx));
+        let outbox = self.outbox.clone();
+        tokio::spawn(async move {
+            exec::execute(fire.actions, ctx).await;
+            let _ = outbox.send(AgentMsg::RunComplete { timer_id: fire.timer_id, run_id: fire.run_id });
+        });
     }
 }
 
@@ -233,7 +238,14 @@ fn handle_server_msg(agent: &Agent, msg: ServerMsg) {
         }
         ServerMsg::TestRun { actions } => {
             tracing::info!("test run requested");
-            let ctx = Ctx { timer_id: None, run_id: None, sound: agent.sound.clone(), results: agent.results.clone() };
+            // Test runs have no timer to dismiss, so they never loop.
+            let ctx = Ctx {
+                timer_id: None,
+                run_id: None,
+                allow_loop: false,
+                sound: agent.sound.clone(),
+                results: agent.results.clone(),
+            };
             tokio::spawn(exec::execute(actions, ctx));
         }
         ServerMsg::Dismissed { timer_id, .. } => agent.sound.stop(timer_id),
@@ -259,7 +271,12 @@ async fn serve_ui(agent: Agent, listener: TcpListener) {
                     incoming = ws.next() => {
                         match incoming {
                             Some(Ok(Message::Text(t))) => {
-                                if let Ok(UiMsg::Dismiss { timer_id }) = serde_json::from_str(&t) {
+                                // Release the state lock before acting on the dismiss.
+                                let dismiss = match serde_json::from_str(&t) {
+                                    Ok(UiMsg::Dismiss { timer_id }) if agent.state().can_dismiss(timer_id) => Some(timer_id),
+                                    _ => None,
+                                };
+                                if let Some(timer_id) = dismiss {
                                     agent.sound.stop(timer_id);
                                     let _ = agent.outbox.send(AgentMsg::Dismiss { timer_id });
                                 }

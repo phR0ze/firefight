@@ -106,7 +106,7 @@ class _ClientPageState extends State<ClientPage> {
                       run: store.runs[def.id],
                       serverNow: store.clock.now,
                       ringSize: (width * 0.4).clamp(96.0, 240.0),
-                      footer: store.runs[def.id]?.state == RunState.firing
+                      footer: def.allowClientDismiss && store.runs[def.id]?.state == RunState.firing
                           ? FilledButton(onPressed: () => store.dismiss(def.id), child: const Text('Dismiss'))
                           : null,
                     ),
