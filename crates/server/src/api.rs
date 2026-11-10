@@ -44,6 +44,7 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{id}/approve", post(approve_client))
         .route("/clients/{id}/assignments", put(set_assignments))
         .route("/clients/{id}/test", post(test_run))
+        .route("/clients/{id}/start", post(start_client_timers))
         .route("/ws", get(admin_ws))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -216,6 +217,11 @@ async fn set_assignments(
     Json(body): Json<Assignments>,
 ) -> ApiResult<ClientView> {
     Ok(Json(s.hub().set_assignments(id, body.timers, Utc::now())?))
+}
+
+/// Start (or resume) every idle or paused timer assigned to a client.
+async fn start_client_timers(State(s): State<AppState>, Path(id): Path<ClientId>) -> ApiResult<Vec<TimerRun>> {
+    Ok(Json(s.hub().start_client_timers(id, Utc::now())?))
 }
 
 #[derive(Deserialize)]

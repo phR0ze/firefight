@@ -356,6 +356,32 @@ impl Hub {
         Ok(self.client_view(self.store.client(id).expect("exists")))
     }
 
+    /// Start every idle or paused timer assigned to a client, all at the same
+    /// instant. Timers already running or firing are left alone.
+    pub fn start_client_timers(&mut self, id: ClientId, now: DateTime<Utc>) -> Result<Vec<TimerRun>> {
+        let c = self.store.client(id).ok_or_else(|| anyhow!("no such client"))?;
+        let ids: Vec<_> = c
+            .assigned_timers
+            .iter()
+            .copied()
+            .filter(|t| self.runs.get(t).is_some_and(|r| matches!(r.state, RunState::Idle | RunState::Paused)))
+            .collect();
+        // One timer failing to start (e.g. a scheduled timer with no upcoming
+        // occurrence) should not block the rest.
+        let started: Vec<_> = ids
+            .into_iter()
+            .filter_map(|t| {
+                self.control(t, Control::Start, now)
+                    .inspect_err(|e| tracing::warn!(timer = %t, "start failed: {e}"))
+                    .ok()
+            })
+            .collect();
+        if started.is_empty() {
+            bail!("no idle or paused timers to start");
+        }
+        Ok(started)
+    }
+
     pub fn test_run(&self, id: ClientId, actions: Vec<Action>) -> Result<()> {
         let c = self.store.client(id).ok_or_else(|| anyhow!("no such client"))?;
         if c.status != ClientStatus::Approved || !self.agents.contains_key(&id) {
@@ -630,6 +656,33 @@ mod tests {
 
         hub.agent_run_complete(b, def.id, run_id, now);
         assert_eq!(hub.runs[&def.id].state, RunState::Idle);
+    }
+
+    #[test]
+    fn start_client_timers_starts_idle_and_paused_only() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let idle = hub.upsert_timer(countdown(60), now);
+        let paused = hub.upsert_timer(countdown(60), now);
+        let running = hub.upsert_timer(countdown(60), now);
+        let other = hub.upsert_timer(countdown(60), now);
+        let (a, _) = hello(&mut hub, None, None).unwrap();
+        hub.approve_client(a, now).unwrap();
+        hub.set_assignments(a, vec![idle.id, paused.id, running.id], now).unwrap();
+        hub.control(paused.id, Control::Start, now).unwrap();
+        hub.control(paused.id, Control::Pause, now).unwrap();
+        hub.control(running.id, Control::Start, now).unwrap();
+        let running_end = hub.runs[&running.id].ends_at;
+
+        let later = now + chrono::Duration::seconds(5);
+        let started = hub.start_client_timers(a, later).unwrap();
+        assert_eq!(started.len(), 2);
+        assert_eq!(hub.runs[&idle.id].state, RunState::Running);
+        assert_eq!(hub.runs[&paused.id].state, RunState::Running);
+        assert_eq!(hub.runs[&running.id].ends_at, running_end, "running timer untouched");
+        assert_eq!(hub.runs[&other.id].state, RunState::Idle, "unassigned timer untouched");
+
+        assert!(hub.start_client_timers(a, later).is_err(), "nothing left to start");
     }
 
     #[test]

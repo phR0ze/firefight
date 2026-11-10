@@ -168,6 +168,12 @@ class ClientCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final startable = client.assignedTimers.any(
+      (id) => switch (store.runs[id]?.state) {
+        RunState.idle || RunState.paused => true,
+        _ => false,
+      },
+    );
     return DragTarget<String>(
       onWillAcceptWithDetails: (d) => !client.assignedTimers.contains(d.data),
       onAcceptWithDetails: (d) =>
@@ -196,6 +202,14 @@ class ClientCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
+                  ),
+                  IconButton(
+                    tooltip: 'Start all assigned timers',
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 20,
+                    color: Palette.amber,
+                    onPressed: startable ? () => guard(context, () => api.startClientTimers(client.id)) : null,
+                    icon: const Icon(Icons.play_arrow_rounded),
                   ),
                   PopupMenuButton<String>(
                     tooltip: 'More',
