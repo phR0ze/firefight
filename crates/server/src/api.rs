@@ -227,13 +227,14 @@ fn parse_bulk(op: &str) -> Result<Bulk, ApiError> {
     }
 }
 
-/// Start, pause or reset every timer assigned to a client.
+/// Start, pause or reset every timer assigned to a client, for that client only.
 async fn bulk_client(State(s): State<AppState>, Path((id, op)): Path<(ClientId, String)>) -> ApiResult<Vec<TimerRun>> {
     let op = parse_bulk(&op)?;
     Ok(Json(s.hub().bulk_client(id, op, Utc::now())?))
 }
 
-/// Start, pause or reset every timer assigned to any approved client.
+/// Start, pause or reset every timer assigned to any approved client, for every client with it.
+/// Starting and resetting also bring clients back in step on each timer's shared run.
 async fn bulk_all(State(s): State<AppState>, op: Bulk) -> ApiResult<Vec<TimerRun>> {
     Ok(Json(s.hub().bulk_all(op, Utc::now())?))
 }

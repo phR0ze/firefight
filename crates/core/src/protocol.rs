@@ -76,12 +76,50 @@ pub enum ServerMsg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AdminEvent {
-    Snapshot { timers: Vec<TimerDef>, runs: Vec<TimerRun>, clients: Vec<ClientView>, server_now: DateTime<Utc> },
-    TimerUpdated { timer: TimerDef, run: TimerRun },
-    TimerDeleted { id: TimerId },
-    RunUpdate { run: TimerRun, server_now: DateTime<Utc> },
-    ClientUpdated { client: ClientView },
-    ClientDeleted { id: ClientId },
+    Snapshot {
+        timers: Vec<TimerDef>,
+        /// Shared runs, followed by every client without its own copy.
+        runs: Vec<TimerRun>,
+        /// Copies of a run that individual clients follow instead of the shared one.
+        client_runs: Vec<ClientRun>,
+        clients: Vec<ClientView>,
+        server_now: DateTime<Utc>,
+    },
+    TimerUpdated {
+        timer: TimerDef,
+        run: TimerRun,
+    },
+    TimerDeleted {
+        id: TimerId,
+    },
+    RunUpdate {
+        run: TimerRun,
+        server_now: DateTime<Utc>,
+    },
+    /// A client's own copy of a timer's run changed.
+    ClientRunUpdate {
+        client_id: ClientId,
+        run: TimerRun,
+        server_now: DateTime<Utc>,
+    },
+    /// A client dropped its own copy and follows the shared run again.
+    ClientRunRemoved {
+        client_id: ClientId,
+        timer_id: TimerId,
+    },
+    ClientUpdated {
+        client: ClientView,
+    },
+    ClientDeleted {
+        id: ClientId,
+    },
+}
+
+/// A run followed by one client only, started from its card in the control deck.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClientRun {
+    pub client_id: ClientId,
+    pub run: TimerRun,
 }
 
 /// Connection state of the agent as shown on the client display.

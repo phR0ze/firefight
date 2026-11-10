@@ -101,8 +101,19 @@ class DeckStore extends _LiveSocket {
 
   /// Insertion-ordered so cards keep their position.
   final timers = <String, TimerDef>{};
+
+  /// Shared run of each timer, followed by every client without its own copy.
   final runs = <String, TimerRun>{};
+
+  /// Copies of a timer's run that a client follows on its own: client id -> timer id -> run.
+  final clientRuns = <String, Map<String, TimerRun>>{};
   final clients = <String, ClientView>{};
+
+  /// The run [clientId] follows for [timerId].
+  TimerRun? runFor(String clientId, String timerId) => clientRuns[clientId]?[timerId] ?? runs[timerId];
+
+  /// How many clients follow their own copy of [timerId]'s run.
+  int separateCount(String timerId) => clientRuns.values.where((m) => m.containsKey(timerId)).length;
 
   @override
   Uri get uri => Uri.parse('ws://$server/api/admin/ws');
@@ -126,6 +137,11 @@ class DeckStore extends _LiveSocket {
             for (final r in ev['runs'] as List)
               MapEntry((r as Map<String, dynamic>)['timer_id'] as String, TimerRun.fromJson(r)),
           ]);
+        clientRuns.clear();
+        // Absent from servers older than per-client runs.
+        for (final cr in ev['client_runs'] as List? ?? const []) {
+          _setClientRun(cr as Map<String, dynamic>);
+        }
         clients
           ..clear()
           ..addEntries([
@@ -142,12 +158,24 @@ class DeckStore extends _LiveSocket {
       case 'run_update':
         final r = TimerRun.fromJson(ev['run'] as Map<String, dynamic>);
         runs[r.timerId] = r;
+      case 'client_run_update':
+        _setClientRun(ev);
+      case 'client_run_removed':
+        final id = ev['client_id'] as String;
+        clientRuns[id]?.remove(ev['timer_id']);
+        if (clientRuns[id]?.isEmpty ?? false) clientRuns.remove(id);
       case 'client_updated':
         final c = ClientView.fromJson(ev['client'] as Map<String, dynamic>);
         clients[c.id] = c;
       case 'client_deleted':
         clients.remove(ev['id']);
+        clientRuns.remove(ev['id']);
     }
+  }
+
+  void _setClientRun(Map<String, dynamic> j) {
+    final r = TimerRun.fromJson(j['run'] as Map<String, dynamic>);
+    (clientRuns[j['client_id'] as String] ??= {})[r.timerId] = r;
   }
 }
 

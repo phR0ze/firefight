@@ -231,9 +231,9 @@ enum BulkOp {
     };
   }
 
-  /// Whether this applies to any of [timerIds].
-  bool appliesToAny(Iterable<String> timerIds, Map<String, TimerDef> timers, Map<String, TimerRun> runs) =>
-      timerIds.any((id) => timers[id] != null && appliesTo(timers[id]!, runs[id]));
+  /// Whether this applies to any of [timerIds], each with the run [runOf] gives.
+  bool appliesToAny(Iterable<String> timerIds, Map<String, TimerDef> timers, TimerRun? Function(String) runOf) =>
+      timerIds.any((id) => timers[id] != null && appliesTo(timers[id]!, runOf(id)));
 }
 
 class TimerRun {

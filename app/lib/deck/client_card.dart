@@ -4,6 +4,7 @@ import '../api/admin_api.dart';
 import '../api/stores.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../widgets/timer_card.dart';
 import 'deck_page.dart';
 
 extension BulkOpIcon on BulkOp {
@@ -218,11 +219,12 @@ class ClientCard extends StatelessWidget {
                   ),
                   for (final op in BulkOp.values)
                     IconButton(
-                      tooltip: '${op.label} all assigned timers',
+                      tooltip: "${op.label} this client's timers",
                       visualDensity: VisualDensity.compact,
                       iconSize: 20,
                       color: op == BulkOp.start ? Palette.amber : Palette.text,
-                      onPressed: op.appliesToAny(client.assignedTimers, store.timers, store.runs)
+                      onPressed:
+                          op.appliesToAny(client.assignedTimers, store.timers, (id) => store.runFor(client.id, id))
                           ? () => guard(context, () => api.bulkClient(client.id, op))
                           : null,
                       icon: Icon(op.icon),
@@ -257,7 +259,11 @@ class ClientCard extends StatelessWidget {
                 children: [
                   for (final id in client.assignedTimers)
                     InputChip(
-                      label: Text(store.timers[id]?.name ?? 'unknown', style: const TextStyle(fontSize: 12)),
+                      label: _ChipLabel(
+                        name: store.timers[id]?.name ?? 'unknown',
+                        separate: store.clientRuns[client.id]?[id],
+                        serverNow: store.clock.now,
+                      ),
                       visualDensity: VisualDensity.compact,
                       backgroundColor: const Color(0xFF20242C),
                       side: const BorderSide(color: Palette.border),
@@ -274,6 +280,43 @@ class ClientCard extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// A timer's name on a client card, plus the state and time left of the
+/// client's own copy of the run when it isn't following the shared one.
+class _ChipLabel extends StatelessWidget {
+  const _ChipLabel({required this.name, required this.separate, required this.serverNow});
+  final String name;
+  final TimerRun? separate;
+  final DateTime Function() serverNow;
+
+  @override
+  Widget build(BuildContext context) {
+    final run = separate;
+    if (run == null) return Text(name, style: const TextStyle(fontSize: 12));
+    final c = pillColors(run.state);
+    return Tooltip(
+      message: 'Running separately from other clients (${run.state.name})',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(name, style: const TextStyle(fontSize: 12)),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(color: c.bg, borderRadius: BorderRadius.circular(4)),
+            child: Ticking(
+              active: run.state == RunState.running,
+              builder: (_) => Text(
+                run.state == RunState.firing ? 'FIRING' : formatRemaining(run.remainingAt(serverNow())),
+                style: TextStyle(color: c.fg, fontSize: 11, fontFamily: monoFamily, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

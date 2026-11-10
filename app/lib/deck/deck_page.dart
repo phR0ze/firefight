@@ -190,11 +190,14 @@ class _ConnectionBanner extends StatelessWidget {
 }
 
 /// Whether [op] would change any timer assigned to an approved client.
-bool _anyApplies(DeckStore store, BulkOp op) => op.appliesToAny(
-  store.clients.values.where((c) => c.status == ClientStatus.approved).expand((c) => c.assignedTimers),
-  store.timers,
-  store.runs,
-);
+bool _anyApplies(DeckStore store, BulkOp op) {
+  final approved = store.clients.values.where((c) => c.status == ClientStatus.approved);
+  final copies = approved.expand((c) => store.clientRuns[c.id]?.values ?? const <TimerRun>[]);
+  // Starting or resetting all also brings clients following their own copy back in step.
+  if (op != BulkOp.pause && copies.isNotEmpty) return true;
+  return op.appliesToAny(approved.expand((c) => c.assignedTimers), store.timers, (id) => store.runs[id]) ||
+      copies.any((r) => store.timers[r.timerId] != null && op.appliesTo(store.timers[r.timerId]!, r));
+}
 
 class _Header extends StatelessWidget {
   const _Header({
@@ -270,7 +273,9 @@ class _Header extends StatelessWidget {
             const SizedBox(width: 8),
             for (final op in BulkOp.values) ...[
               Tooltip(
-                message: '${op.label} every timer assigned to a client',
+                message: op == BulkOp.pause
+                    ? 'Pause every timer assigned to a client'
+                    : '${op.label} every timer assigned to a client, in step on every client',
                 child: OutlinedButton.icon(
                   onPressed: onBulk(op),
                   icon: Icon(op.icon, size: 20),
@@ -371,6 +376,7 @@ class _DeckTimerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = run?.state ?? RunState.idle;
     final isAtTime = def.kind is AtTime;
+    final separate = store.separateCount(def.id);
     void op(String name, {int? secs}) => guard(context, () => api.control(def.id, name, addSecs: secs));
 
     final (label, action, primary) = switch (state) {
@@ -395,27 +401,43 @@ class _DeckTimerCard extends StatelessWidget {
           PopupMenuItem(value: 'delete', child: Text('Delete')),
         ],
       ),
-      footer: Row(
+      footer: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: FilledButton(style: primary ? null : neutralButton(), onPressed: action, child: Text(label)),
-          ),
-          const SizedBox(width: 8),
-          Tooltip(
-            message: state == RunState.firing ? 'Snooze 1 minute' : 'Add 1 minute',
-            child: OutlinedButton(
-              onPressed: isAtTime && state != RunState.firing ? null : () => op('add', secs: 60),
-              child: const Text('+1m'),
+          if (separate > 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Tooltip(
+                message: 'Started from a client card. Start or reset here to bring them back in step.',
+                child: Text(
+                  '$separate client${separate == 1 ? '' : 's'} running separately',
+                  style: const TextStyle(color: Palette.muted, fontSize: 12),
+                ),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Tooltip(
-            message: 'Reset',
-            child: OutlinedButton(
-              onPressed: () => op('reset'),
-              style: OutlinedButton.styleFrom(padding: EdgeInsets.zero),
-              child: const Icon(Icons.replay, size: 18),
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(style: primary ? null : neutralButton(), onPressed: action, child: Text(label)),
+              ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: state == RunState.firing ? 'Snooze 1 minute' : 'Add 1 minute',
+                child: OutlinedButton(
+                  onPressed: isAtTime && state != RunState.firing ? null : () => op('add', secs: 60),
+                  child: const Text('+1m'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Tooltip(
+                message: 'Reset',
+                child: OutlinedButton(
+                  onPressed: () => op('reset'),
+                  style: OutlinedButton.styleFrom(padding: EdgeInsets.zero),
+                  child: const Icon(Icons.replay, size: 18),
+                ),
+              ),
+            ],
           ),
         ],
       ),
