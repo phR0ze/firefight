@@ -106,7 +106,7 @@ Like the Linux deck, it uses plain HTTP, so use it only on a trusted LAN.
 ### Pre-configured deployment
 
 For fleets set up by configuration management (a NixOS module lives in
-[nixos-config](https://github.com/phR0ze/nixos-config) under `modules/apps/system/firefight`), every
+[nixos-config](https://github.com/phR0ze/nixos-config) under `modules/services/native/firefight`), every
 piece can start already connected and keyed:
 
 | Flag                                   | Effect                                                                         |

@@ -28,6 +28,7 @@ abstract class _LiveSocket extends ChangeNotifier {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   Timer? _retry;
+  int _quickRetries = 0;
   bool _disposed = false;
   bool connected = false;
   String? error;
@@ -43,11 +44,12 @@ abstract class _LiveSocket extends ChangeNotifier {
     final channel = IOWebSocketChannel.connect(uri, headers: headers, pingInterval: const Duration(seconds: 15));
     _channel = channel;
     channel.ready.then((_) {
-      if (_disposed) return;
+      if (_disposed || _channel != channel) return;
       connected = true;
       error = null;
+      _quickRetries = 0;
       notifyListeners();
-    }, onError: (Object e) => _closed(e));
+    }, onError: (Object e) => _closed(channel, e));
     _sub = channel.stream.listen(
       (data) {
         final ev = jsonDecode(data as String) as Map<String, dynamic>;
@@ -55,22 +57,46 @@ abstract class _LiveSocket extends ChangeNotifier {
         onEvent(ev);
         notifyListeners();
       },
-      onError: (Object e) => _closed(e),
-      onDone: () => _closed(channel.closeReason ?? 'connection closed'),
+      onError: (Object e) => _closed(channel, e),
+      onDone: () => _closed(channel, channel.closeReason ?? 'connection closed'),
       cancelOnError: true,
     );
   }
 
-  void _closed(Object reason) {
+  /// Drop the current socket, which may have silently died while the app was
+  /// suspended, and connect again right away.
+  ///
+  /// The network can take a moment to come back after a resume, so the next
+  /// few failures retry quickly without surfacing an error.
+  void reconnect() {
     if (_disposed) return;
+    _retry?.cancel();
+    _sub?.cancel();
+    _channel?.sink.close();
+    _channel = null;
+    connected = false;
+    error = null;
+    _quickRetries = 6;
+    notifyListeners();
+    connect();
+  }
+
+  void _closed(WebSocketChannel channel, Object reason) {
+    // Ignore late errors from a socket [reconnect] already replaced.
+    if (_disposed || _channel != channel) return;
     _sub?.cancel();
     final wasConnected = connected;
     connected = false;
-    error = _describe(reason);
+    _retry?.cancel();
+    if (_quickRetries > 0) {
+      _quickRetries--;
+      _retry = Timer(const Duration(milliseconds: 500), connect);
+    } else {
+      error = _describe(reason);
+      _retry = Timer(Duration(seconds: wasConnected ? 1 : 3), connect);
+    }
     onDisconnected();
     notifyListeners();
-    _retry?.cancel();
-    _retry = Timer(Duration(seconds: wasConnected ? 1 : 3), connect);
   }
 
   String _describe(Object e) {

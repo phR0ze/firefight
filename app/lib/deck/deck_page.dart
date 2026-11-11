@@ -31,15 +31,38 @@ class DeckPage extends StatefulWidget {
   State<DeckPage> createState() => _DeckPageState();
 }
 
-class _DeckPageState extends State<DeckPage> {
+class _DeckPageState extends State<DeckPage> with WidgetsBindingObserver {
   late final store = DeckStore(server: widget.server, token: widget.token)..connect();
   late final api = AdminApi(server: widget.server, token: widget.token);
 
   /// Selected tab in the compact (phone) layout: 0 timers, 1 clients.
   int _tab = 0;
 
+  /// Set once the app leaves the foreground, e.g. Android suspending it.
+  bool _backgrounded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.hidden || AppLifecycleState.paused:
+        _backgrounded = true;
+      case AppLifecycleState.resumed when _backgrounded:
+        // The socket likely died while suspended; don't wait for the ping or retry timer to notice.
+        _backgrounded = false;
+        store.reconnect();
+      default:
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     store.dispose();
     super.dispose();
   }
