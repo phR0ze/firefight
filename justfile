@@ -53,7 +53,9 @@ _apk:
     }
     trap restore EXIT
     printf 'dependency_overrides:\n  cnativeapi:\n    path: %s\n' "$stub" > pubspec_overrides.yaml
-    flutter build apk --release
+    # Android only installs an APK over the existing app when its version code is higher, so
+    # each build takes minutes since the epoch (always rising, and far below Android's limit).
+    flutter build apk --release --build-number=$(( $(date +%s) / 60 ))
 
 # Run a component locally: server, deck, agent, client or mobile. Restarts it if already running.
 run target:
