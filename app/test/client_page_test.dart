@@ -5,24 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  Future<void> pump(WidgetTester tester, {VoidCallback? onSettings}) async {
+  testWidgets('has no settings: the agent runs the display', (tester) async {
     // Port 1 on loopback refuses connections.
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: buildTheme(),
-        home: ClientPage(agentPort: 1, onSettings: onSettings),
-      ),
-    );
-  }
-
-  testWidgets('offers settings when run on its own', (tester) async {
-    await pump(tester, onSettings: () {});
-    expect(find.byTooltip('Settings'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('hides settings when the agent runs the display', (tester) async {
-    await pump(tester);
+    await tester.pumpWidget(MaterialApp(theme: buildTheme(), home: const ClientPage(agentPort: 1)));
     expect(find.byTooltip('Settings'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });

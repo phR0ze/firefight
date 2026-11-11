@@ -22,7 +22,7 @@ pub struct Display {
 impl Display {
     fn command(&self, ui_port: u16) -> Command {
         let mut cmd = Command::new(&self.program);
-        cmd.args(&self.args).arg("--mode=client").arg(format!("--agent-port={ui_port}")).arg("--supervised");
+        cmd.args(&self.args).arg("--mode=client").arg(format!("--agent-port={ui_port}"));
         // The display must not outlive the agent, however the agent ends.
         // SAFETY: prctl is async-signal-safe and touches no memory of the parent.
         unsafe {
@@ -35,8 +35,7 @@ impl Display {
     }
 }
 
-/// Launch the display and relaunch it whenever it exits. It runs with `--supervised`, so it
-/// offers no way to quit, and it is stopped when the agent exits.
+/// Launch the display and relaunch it whenever it exits. It is stopped when the agent exits.
 pub fn supervise(display: Display, ui_port: u16) {
     // A dedicated thread that never ends: the parent-death signal fires when the thread that
     // spawned the child exits, so a short-lived thread would take the display down with it.

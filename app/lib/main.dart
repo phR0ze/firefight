@@ -10,31 +10,28 @@ import 'theme.dart';
 
 /// Arguments: `--mode=server|client`, `--server=<host:port>`, `--token=<admin token>`,
 /// `--token-file=<path>`, `--agent-port=<port>`. Values given here are remembered for the next
-/// launch. The Linux client display lives in the system tray: `--start-hidden` starts it there,
-/// `--no-tray` makes closing the window quit as usual. `--supervised` is passed by
-/// firefight-agent when it runs the display: it then cannot be quit or switched to another mode.
+/// launch. The Linux client display is run by firefight-agent and cannot be quit: it lives in
+/// the system tray (`--start-hidden` starts it there), or with `--no-tray` closing the window
+/// minimizes it. Its mode and agent port come from the agent, so it has no settings screen.
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = (await AppSettings.load())..applyArgs(args);
   settings.adminToken ??= AppSettings.localAdminToken();
-  final client = Platform.isLinux && settings.mode == AppMode.client;
-  final supervised = client && args.contains('--supervised');
-  final tray = client && !args.contains('--no-tray')
-      ? ClientTray.start(startHidden: args.contains('--start-hidden'), supervised: supervised)
-      : null;
-  if (supervised && tray == null) ClientTray.keepOpen();
-  runApp(FirefightApp(settings: settings, tray: tray, supervised: supervised));
+  if (Platform.isLinux && settings.mode == AppMode.client) {
+    final tray = args.contains('--no-tray') ? null : ClientTray.start();
+    if (tray == null) ClientTray.keepOpen();
+    runApp(FirefightApp(settings: settings, tray: tray));
+  } else {
+    runApp(FirefightApp(settings: settings));
+  }
 }
 
 class FirefightApp extends StatefulWidget {
-  const FirefightApp({super.key, required this.settings, this.tray, this.supervised = false});
+  const FirefightApp({super.key, required this.settings, this.tray});
   final AppSettings settings;
 
   /// Present when the client display runs in the system tray.
   final ClientTray? tray;
-
-  /// The client display is run by firefight-agent, which sets its mode and agent port.
-  final bool supervised;
 
   @override
   State<FirefightApp> createState() => _FirefightAppState();
@@ -82,7 +79,6 @@ class _FirefightAppState extends State<FirefightApp> {
               AppMode.client => ClientPage(
                 key: ValueKey(generation),
                 agentPort: settings.agentPort,
-                onSettings: widget.supervised ? null : _openSettings,
                 onFiring: widget.tray?.show,
               ),
             },

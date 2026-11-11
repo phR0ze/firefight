@@ -74,14 +74,10 @@ cargo build --release
    The client appears under **Awaiting approval** in the control deck. Approve it, and the agent receives
    and stores its token in `~/.config/firefight/agent.toml`.
 
-4. **Optionally show the client display** on the client machine. Either let the agent run it, so it is
-   always up while the agent is (add this to the agent's command line):
+4. **Optionally show the client display** on the client machine by having the agent run it (add this to
+   the agent's command line):
    ```bash
    --display app/build/linux/x64/release/bundle/firefight
-   ```
-   or open it yourself:
-   ```bash
-   app/build/linux/x64/release/bundle/firefight --mode=client
    ```
 
 5. **Create a timer** with **+ New timer**, drag its card onto a client, and press **Start** (or **Arm**
@@ -89,15 +85,14 @@ cargo build --release
 
 Settings passed on the command line are remembered in `~/.config/firefight/app.json`.
 
-The client display lives in the system tray: closing its window hides it (the tray menu's **Show** brings
-it back, **Quit** exits), and it comes to the front by itself when one of its timers starts firing. Start it
-with `--start-hidden` to go straight to the tray, or `--no-tray` to make closing the window quit. The tray
-needs a panel that hosts StatusNotifierItems (most do; GNOME needs the AppIndicator extension).
-
-When the agent runs the display (`--display <path>`, with options for it passed as `--display-arg
---start-hidden` and so on), it starts it a few seconds after the agent starts, relaunches it whenever it
-exits and stops it with the agent. While the agent runs, the display can't be quit: the tray has no **Quit**,
-closing the window without a tray only minimizes it, and its settings are hidden.
+The client display runs for as long as the agent does. The agent starts it a few seconds after starting
+itself, relaunches it whenever it exits and stops it along with itself; options for the display go in
+`--display-arg` (e.g. `--display-arg --start-hidden`). The display can't be quit and has no settings. It
+lives in the system tray: closing its window hides it, a click on the tray icon brings it back (a double
+click on GNOME), and it comes to the front by itself when one of its timers starts firing, unless the
+timer is set not to. Start it with `--start-hidden` to go straight to the tray, or `--no-tray` to run without
+one, in which case closing the window minimizes it. The tray needs a panel that hosts StatusNotifierItems
+(most do; GNOME needs the AppIndicator extension).
 
 ### Android control deck
 

@@ -6,13 +6,11 @@ import '../theme.dart';
 import '../widgets/timer_card.dart';
 
 /// Display for a client machine: shows the timers assigned to it by the server,
-/// as reported by the local firefight-agent.
+/// as reported by the local firefight-agent. The agent runs it and sets its port, so it
+/// has no settings.
 class ClientPage extends StatefulWidget {
-  const ClientPage({super.key, required this.agentPort, this.onSettings, this.onFiring});
+  const ClientPage({super.key, required this.agentPort, this.onFiring});
   final int agentPort;
-
-  /// Opens the settings screen; null hides the button (the agent runs this display).
-  final VoidCallback? onSettings;
 
   /// Called when an assigned timer set to focus on fire starts firing, e.g. to bring a
   /// tray-hidden window forward.
@@ -78,13 +76,6 @@ class _ClientPageState extends State<ClientPage> {
                   ),
                   const SizedBox(width: 16),
                   _StatusBadge(store: store),
-                  const Spacer(),
-                  if (widget.onSettings != null)
-                    IconButton(
-                      onPressed: widget.onSettings,
-                      icon: const Icon(Icons.settings_outlined),
-                      tooltip: 'Settings',
-                    ),
                 ],
               ),
             ),
