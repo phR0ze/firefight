@@ -4,3 +4,4 @@ target/
 app/build/
 app/.dart_tool/
 .worktrees
+build

@@ -1,0 +1,3 @@
+dependency_overrides:
+  cnativeapi:
+    path: build/android-stubs/cnativeapi

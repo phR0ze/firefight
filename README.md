@@ -102,7 +102,7 @@ address and admin token.
 
 ```bash
 just build mobile                          # signed with the debug key, for sideloading
-adb install app/build/app/outputs/flutter-apk/app-release.apk
+adb install build/firefight.apk
 ```
 
 On first launch enter the server's LAN address (`<server-host>:7878`) and the admin token from the

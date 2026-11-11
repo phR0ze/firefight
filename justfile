@@ -23,7 +23,9 @@ _build-linux:
 # Signed with the debug key, for sideloading
 _build-mobile:
     {{ dev }} just _apk
-    @echo "APK: app/build/app/outputs/flutter-apk/app-release.apk (install with: adb install <path>)"
+    mkdir -p build
+    cp app/build/app/outputs/flutter-apk/app-release.apk build/firefight.apk
+    @echo "APK: build/firefight.apk (install with: adb install build/firefight.apk)"
 
 # The tray plugins only run in the Linux client display (see app/lib/main.dart), but their native
 # library, cnativeapi, has a build hook that compiles its C++ core with the NDK for every Android ABI.
