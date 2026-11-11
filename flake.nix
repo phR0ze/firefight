@@ -63,6 +63,7 @@
 
       nativeBuildInputs = with pkgs; [
         bashInteractive                   # Solve for normal shell operation
+        just                              # Build recipes in the justfile
 
         # LLVM tooling
         clang                             # A C language family frontend for LLVM

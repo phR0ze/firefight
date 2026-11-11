@@ -44,9 +44,12 @@ also works.
 
 ### Getting started
 
-Everything builds inside the dev shell:
+Everything builds inside the dev shell. `just build` enters it for you and builds the release server,
+agent and Linux app:
 
 ```bash
+just build
+# or by hand
 nix develop
 cargo build --release
 (cd app && flutter build linux --release)
@@ -93,9 +96,8 @@ and assignments stay in sync across every deck and client display. The phone onl
 address and admin token.
 
 ```bash
-nix develop
-cd app && flutter build apk --release      # signed with the debug key, for sideloading
-adb install build/app/outputs/flutter-apk/app-release.apk
+just build mobile                          # signed with the debug key, for sideloading
+adb install app/build/app/outputs/flutter-apk/app-release.apk
 ```
 
 On first launch enter the server's LAN address (`<server-host>:7878`) and the admin token from the
@@ -180,30 +182,19 @@ docs/design     UI mockups
 
 ### Run locally
 
-1. Server (throwaway data dir)
-   ```bash
-   cargo run -p firefight-server -- --data-dir /tmp/ff-test
-   ```
+Each component runs in the foreground of its own terminal. Running a target again stops the previous
+run of it first, so `just run <target>` also restarts it. Outside the dev shell the targets enter it
+themselves.
 
-2. Control deck (debug build with hot reload; press `r` in this terminal to reload after edits)
-   ```bash
-   cd app && flutter run -d linux -a --mode=server -a --server=localhost:7878 -a --token=$(cat /tmp/ff-test/admin_token)
-   ```
+| Command           | Runs                                                                           |
+|-------------------|--------------------------------------------------------------------------------|
+| `just run server` | Server with a throwaway data dir (`/tmp/ff-test`)                              |
+| `just run deck`   | Control deck, debug build with hot reload (press `r` to reload after edits)    |
+| `just run agent`  | Agent named "Test box" with a throwaway config                                 |
+| `just run client` | Optional: the client display                                                   |
+| `just run mobile` | Optional: the Android control deck in an emulator, with hot reload             |
 
-3. Agent (throwaway config)
-   ```bash
-   cargo run -p firefight-agent -- --server localhost:7878 --name "Test box" --config /tmp/ff-test/agent.toml
-   ```
-
-4. Optional: the client display
-   ```bash
-   cd app && flutter run -d linux -a --mode=client
-   ```
-
-5. Optional: the Android control deck in an emulator (KVM accelerated; the device persists in
-   `~/.local/share/firefight-emulator`)
-   ```bash
-   nix run .#emulator                # boots the emulator, returns once it is ready
-   cd app && flutter run             # installs and starts the app on it, with hot reload
-   ```
-   Inside the emulator the host is `10.0.2.2`, so connect the app to `10.0.2.2:7878`.
+Start the server first: the deck reads its admin token from the data dir. `just run mobile` boots the
+emulator (KVM accelerated; the device persists in `~/.local/share/firefight-emulator`) unless it is
+already running, and leaves it running on restarts. Inside the emulator the host is `10.0.2.2`, so
+connect the app to `10.0.2.2:7878`. The exact commands are in the [`justfile`](justfile).
