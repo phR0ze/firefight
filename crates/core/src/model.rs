@@ -18,13 +18,13 @@ pub struct TimerDef {
     /// Actions executed on every assigned client when the timer finishes.
     #[serde(default)]
     pub actions: Vec<Action>,
-    /// Whether client displays may dismiss the timer while it is firing.
-    /// The control deck can always dismiss.
-    #[serde(default = "default_allow_client_dismiss")]
-    pub allow_client_dismiss: bool,
+    /// Whether client displays bring their window to the front (out of the tray or from
+    /// behind other windows) when the timer starts firing.
+    #[serde(default = "default_focus_on_fire")]
+    pub focus_on_fire: bool,
 }
 
-pub fn default_allow_client_dismiss() -> bool {
+pub fn default_focus_on_fire() -> bool {
     true
 }
 
@@ -93,7 +93,9 @@ pub enum ActionKind {
         sound: String,
         /// 0.0 - 1.0
         volume: f32,
-        loop_until_dismissed: bool,
+        /// Repeat the sound for this many seconds, then stop. `None` plays it once.
+        #[serde(default)]
+        duration_secs: Option<u32>,
     },
     /// Run a shell command via `sh -c` on the client.
     Command { cmd: String },
@@ -170,7 +172,7 @@ mod tests {
             actions: vec![
                 Action {
                     id: Uuid::new_v4(),
-                    kind: ActionKind::Sound { sound: "gong".into(), volume: 0.8, loop_until_dismissed: true },
+                    kind: ActionKind::Sound { sound: "gong".into(), volume: 0.8, duration_secs: Some(10) },
                     mode: ActionMode::Parallel,
                 },
                 Action {
@@ -179,7 +181,7 @@ mod tests {
                     mode: ActionMode::AfterPrevious,
                 },
             ],
-            allow_client_dismiss: false,
+            focus_on_fire: false,
         };
         let json = serde_json::to_string(&def).unwrap();
         assert!(json.contains(r#""time":"09:45""#));
@@ -188,10 +190,11 @@ mod tests {
     }
 
     #[test]
-    fn timer_def_defaults_to_client_dismiss() {
+    fn timer_def_defaults_to_focus() {
         let json =
             r#"{"id":"00000000-0000-0000-0000-000000000000","name":"t","kind":{"type":"countdown","duration_secs":5}}"#;
-        assert!(serde_json::from_str::<TimerDef>(json).unwrap().allow_client_dismiss);
+        let def = serde_json::from_str::<TimerDef>(json).unwrap();
+        assert!(def.focus_on_fire);
     }
 
     #[test]

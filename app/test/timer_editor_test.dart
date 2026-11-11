@@ -69,6 +69,29 @@ void main() {
     expect(def.actions[1].mode, ActionMode.afterPrevious);
   });
 
+  testWidgets('sound duration chips pick a play time or play once', (tester) async {
+    final result = await open(tester);
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'Chime');
+    await tester.tap(find.text('+ Sound'));
+    await tester.pump();
+    expect(find.text('Repeats for 10s'), findsOneWidget);
+
+    await tester.tap(find.text('30s'));
+    await tester.pump();
+    expect(find.text('Repeats for 30s'), findsOneWidget);
+
+    // Tapping the selected chip again clears it.
+    await tester.tap(find.text('30s'));
+    await tester.pump();
+    expect(find.text('Plays once'), findsOneWidget);
+
+    await tester.tap(find.text('Save timer'));
+    await tester.pumpAndSettle();
+    expect(((await result())!.actions.single.kind as SoundAction).durationSecs, isNull);
+  });
+
   testWidgets('validates empty command and empty name', (tester) async {
     await open(tester);
     await tester.tap(find.text('open'));
@@ -94,13 +117,21 @@ void main() {
     expect(find.text('22'), findsOneWidget);
     expect(find.text('30'), findsOneWidget);
     await tester.tap(find.text('Mon'));
-    await tester.tap(find.text('Clients can dismiss'));
+    await tester.pump();
+    // Below the fold of the WHEN pane, which builds lazily.
+    final focus = find.text('Bring client display to front');
+    await tester.scrollUntilVisible(
+      focus,
+      100,
+      scrollable: find.ancestor(of: find.text('Mon'), matching: find.byType(Scrollable)).first,
+    );
+    await tester.tap(focus);
     await tester.pump();
     await tester.tap(find.text('Save timer'));
     await tester.pumpAndSettle();
     final def = (await result())!;
     expect(def.id, 'x');
-    expect(def.allowClientDismiss, isFalse);
+    expect(def.focusOnFire, isFalse);
     expect(((def.kind as AtTime).repeat as RepeatDays).days, {Weekday.mon, Weekday.fri});
   });
 

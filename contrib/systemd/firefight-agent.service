@@ -7,7 +7,8 @@
 #   firefight-agent --server <server-host>:7878
 # then copy this file to ~/.config/systemd/user/ and run
 #   systemctl --user enable --now firefight-agent
-# Adjust ExecStart to where firefight-agent is installed.
+# Adjust ExecStart to where firefight-agent is installed. To have the agent keep
+# the client display running, append `--display <path to the firefight app>`.
 [Unit]
 Description=firefight agent
 After=graphical-session.target network-online.target

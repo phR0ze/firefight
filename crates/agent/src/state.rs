@@ -16,9 +16,6 @@ pub struct Fire {
     pub timer_id: TimerId,
     pub run_id: RunId,
     pub actions: Vec<Action>,
-    /// Sounds may loop only when someone on a client can dismiss them;
-    /// otherwise the run must end on its own.
-    pub allow_loop: bool,
 }
 
 #[derive(Debug)]
@@ -31,6 +28,8 @@ pub struct AgentState {
     /// Estimated `server clock - local clock`, in milliseconds.
     offset_ms: Option<f64>,
     fired: VecDeque<RunId>,
+    /// Runs this agent started executing, until the server reports they ended.
+    executing: HashMap<TimerId, RunId>,
 }
 
 impl AgentState {
@@ -43,6 +42,7 @@ impl AgentState {
             runs: HashMap::new(),
             offset_ms: None,
             fired: VecDeque::new(),
+            executing: HashMap::new(),
         }
     }
 
@@ -75,19 +75,40 @@ impl AgentState {
             return None;
         }
         let def = self.timers.iter().find(|t| t.id == run.timer_id)?;
-        let fire = Fire {
-            timer_id: def.id,
-            run_id: run.run_id,
-            actions: def.actions.clone(),
-            allow_loop: def.allow_client_dismiss,
-        };
+        let fire = Fire { timer_id: def.id, run_id: run.run_id, actions: def.actions.clone() };
         self.mark_fired(run.run_id);
+        self.executing.insert(run.timer_id, run.run_id);
         Some(fire)
     }
 
+    /// Whether the run this agent is executing for `timer_id` was reset, dismissed,
+    /// snoozed or unassigned since it fired. If so it is forgotten, and the caller
+    /// should stop its actions and sounds.
+    fn take_ended(&mut self, timer_id: TimerId) -> bool {
+        let Some(run_id) = self.executing.get(&timer_id) else { return false };
+        let live = self
+            .runs
+            .get(&timer_id)
+            .is_some_and(|r| r.run_id == *run_id && matches!(r.state, RunState::Running | RunState::Firing));
+        if !live {
+            self.executing.remove(&timer_id);
+        }
+        !live
+    }
+
+    /// The server stopped `run_id`; returns whether this agent is executing it.
+    pub fn take_stopped(&mut self, timer_id: TimerId, run_id: RunId) -> bool {
+        let ours = self.executing.get(&timer_id) == Some(&run_id);
+        if ours {
+            self.executing.remove(&timer_id);
+        }
+        ours
+    }
+
     /// Replace the assigned timers. Runs that already fired before this sync
-    /// (e.g. while the agent was offline) are not replayed.
-    pub fn apply_assigned(&mut self, timers: Vec<TimerDef>, runs: Vec<TimerRun>) {
+    /// (e.g. while the agent was offline) are not replayed. Returns the timers
+    /// whose executing run ended meanwhile.
+    pub fn apply_assigned(&mut self, timers: Vec<TimerDef>, runs: Vec<TimerRun>) -> Vec<TimerId> {
         self.timers = timers;
         self.runs = runs.into_iter().map(|r| (r.timer_id, r)).collect();
         let already: Vec<_> = self.runs.values().filter(|r| r.state == RunState::Firing).map(|r| r.run_id).collect();
@@ -96,19 +117,23 @@ impl AgentState {
                 self.mark_fired(id);
             }
         }
+        let executing: Vec<_> = self.executing.keys().copied().collect();
+        executing.into_iter().filter(|t| self.take_ended(*t)).collect()
     }
 
     /// Apply a live run update. Returns a fire if the server reports a firing run
-    /// the agent has not executed yet (it was late locally), and whether a
-    /// previously firing run stopped firing (so sounds should stop).
+    /// the agent has not executed yet (it was late locally), and whether the run
+    /// the agent was executing ended (so its actions and sounds should stop
+    /// before any new fire starts).
     pub fn apply_run(&mut self, run: TimerRun) -> (Option<Fire>, bool) {
-        if !self.timers.iter().any(|t| t.id == run.timer_id) {
+        let timer_id = run.timer_id;
+        if !self.timers.iter().any(|t| t.id == timer_id) {
             return (None, false);
         }
-        let was_firing = self.runs.get(&run.timer_id).is_some_and(|r| r.state == RunState::Firing);
-        let fire = if run.state == RunState::Firing { self.fire_for(&run) } else { None };
-        let stopped = was_firing && run.state != RunState::Firing;
-        self.runs.insert(run.timer_id, run);
+        let firing = run.state == RunState::Firing;
+        self.runs.insert(timer_id, run.clone());
+        let stopped = self.take_ended(timer_id);
+        let fire = if firing { self.fire_for(&run) } else { None };
         (fire, stopped)
     }
 
@@ -117,11 +142,6 @@ impl AgentState {
         let now = self.server_now(local_now);
         let due: Vec<_> = self.runs.values().filter(|r| r.is_due(now)).cloned().collect();
         due.iter().filter_map(|r| self.fire_for(r)).collect()
-    }
-
-    /// Whether the local display may dismiss this timer.
-    pub fn can_dismiss(&self, timer_id: TimerId) -> bool {
-        self.timers.iter().any(|t| t.id == timer_id && t.allow_client_dismiss)
     }
 
     pub fn ui_event(&self, local_now: DateTime<Utc>) -> UiEvent {
@@ -157,7 +177,7 @@ mod tests {
                 kind: ActionKind::Command { cmd: "true".into() },
                 mode: ActionMode::Parallel,
             }],
-            allow_client_dismiss: true,
+            focus_on_fire: true,
         };
         let mut run = TimerRun::idle(def.id, 10_000);
         run.start(t(0)).unwrap();
@@ -197,6 +217,32 @@ mod tests {
         assert!(!stopped);
         run.dismiss(10_000).unwrap();
         assert_eq!(s.apply_run(run), (None, true));
+    }
+
+    #[test]
+    fn reset_after_local_fire_stops_the_run() {
+        let (mut s, mut run) = setup();
+        assert_eq!(s.due(t(10)).len(), 1);
+        // The server resets the run before its own tick saw it fire.
+        run.reset(10_000);
+        assert_eq!(s.apply_run(run.clone()), (None, true));
+        assert_eq!(s.apply_run(run), (None, false), "already stopped");
+    }
+
+    #[test]
+    fn stop_message_only_stops_the_run_it_names() {
+        let (mut s, run) = setup();
+        assert_eq!(s.due(t(10)).len(), 1);
+        assert!(!s.take_stopped(run.timer_id, Uuid::new_v4()));
+        assert!(s.take_stopped(run.timer_id, run.run_id));
+        assert!(!s.take_stopped(run.timer_id, run.run_id));
+    }
+
+    #[test]
+    fn unassigning_stops_the_run() {
+        let (mut s, _) = setup();
+        let fired = s.due(t(10));
+        assert_eq!(s.apply_assigned(vec![], vec![]), vec![fired[0].timer_id]);
     }
 
     #[test]

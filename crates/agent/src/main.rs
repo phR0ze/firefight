@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use firefight_agent::config::{self, AgentConfig};
+use firefight_agent::display::{self, Display};
 use firefight_core::DEFAULT_AGENT_UI_PORT;
 use tokio::net::TcpListener;
 
 const USAGE: &str = "usage: firefight-agent [--server <host:port>] [--name <name>] [--ui-port <port>] \
-[--config <path>] [--enroll-key-file <path>]";
+[--config <path>] [--enroll-key-file <path>] [--display <firefight app> [--display-arg <arg>]...]";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,6 +18,9 @@ async fn main() -> Result<()> {
     let (mut server, mut name, mut ui_port) = (None, None, None);
     let mut config_path = config::default_config_path();
     let mut enroll_key_file: Option<PathBuf> = None;
+    // The client display to keep running alongside the agent, if any.
+    let mut display: Option<PathBuf> = None;
+    let mut display_args = vec![];
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -25,12 +29,17 @@ async fn main() -> Result<()> {
             "--ui-port" => ui_port = Some(args.next().context(USAGE)?.parse().context("invalid --ui-port")?),
             "--config" => config_path = PathBuf::from(args.next().context(USAGE)?),
             "--enroll-key-file" => enroll_key_file = Some(PathBuf::from(args.next().context(USAGE)?)),
+            "--display" => display = Some(PathBuf::from(args.next().context(USAGE)?)),
+            "--display-arg" => display_args.push(args.next().context(USAGE)?),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Ok(());
             }
             other => bail!("unknown argument {other}\n{USAGE}"),
         }
+    }
+    if display.is_none() && !display_args.is_empty() {
+        bail!("--display-arg needs --display\n{USAGE}");
     }
 
     // Command-line values override the config file; the result is saved back.
@@ -68,5 +77,8 @@ async fn main() -> Result<()> {
     let ui_addr = format!("127.0.0.1:{}", cfg.ui_port);
     let ui = TcpListener::bind(&ui_addr).await.with_context(|| format!("binding {ui_addr}"))?;
     tracing::info!("client display socket on ws://{ui_addr}, config in {}", config_path.display());
+    if let Some(program) = display {
+        display::supervise(Display { program, args: display_args }, cfg.ui_port);
+    }
     firefight_agent::run(cfg, Some(config_path), ui).await
 }

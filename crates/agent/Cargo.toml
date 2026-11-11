@@ -8,6 +8,7 @@ firefight-core.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
+libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

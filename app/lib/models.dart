@@ -109,7 +109,7 @@ sealed class ActionKind {
     'sound' => SoundAction(
       sound: j['sound'] as String,
       volume: (j['volume'] as num).toDouble(),
-      loopUntilDismissed: j['loop_until_dismissed'] as bool,
+      durationSecs: j['duration_secs'] as int?,
     ),
     'command' => CommandAction(j['cmd'] as String),
     final t => throw FormatException('unknown action $t'),
@@ -117,17 +117,14 @@ sealed class ActionKind {
 }
 
 class SoundAction extends ActionKind {
-  const SoundAction({required this.sound, this.volume = 0.8, this.loopUntilDismissed = true});
+  const SoundAction({required this.sound, this.volume = 0.8, this.durationSecs = 10});
   final String sound;
   final double volume;
-  final bool loopUntilDismissed;
+
+  /// Repeat the sound for this many seconds; null plays it once.
+  final int? durationSecs;
   @override
-  Map<String, dynamic> toJson() => {
-    'type': 'sound',
-    'sound': sound,
-    'volume': volume,
-    'loop_until_dismissed': loopUntilDismissed,
-  };
+  Map<String, dynamic> toJson() => {'type': 'sound', 'sound': sound, 'volume': volume, 'duration_secs': durationSecs};
 }
 
 class CommandAction extends ActionKind {
@@ -168,22 +165,22 @@ class TimerDef {
     required this.name,
     required this.kind,
     this.actions = const [],
-    this.allowClientDismiss = true,
+    this.focusOnFire = true,
   });
   final String id;
   final String name;
   final TimerKind kind;
   final List<TimerAction> actions;
 
-  /// Whether client displays may dismiss the timer while it is firing.
-  final bool allowClientDismiss;
+  /// Whether client displays bring their window to the front when the timer starts firing.
+  final bool focusOnFire;
 
   factory TimerDef.fromJson(Map<String, dynamic> j) => TimerDef(
     id: j['id'] as String,
     name: j['name'] as String,
     kind: TimerKind.fromJson(j['kind'] as Map<String, dynamic>),
     actions: [for (final a in (j['actions'] as List? ?? [])) TimerAction.fromJson(a as Map<String, dynamic>)],
-    allowClientDismiss: j['allow_client_dismiss'] as bool? ?? true,
+    focusOnFire: j['focus_on_fire'] as bool? ?? true,
   );
 
   /// Body for create/update requests (the server owns the id).
@@ -191,7 +188,7 @@ class TimerDef {
     'name': name,
     'kind': kind.toJson(),
     'actions': [for (final a in actions) a.toJson()],
-    'allow_client_dismiss': allowClientDismiss,
+    'focus_on_fire': focusOnFire,
   };
 
   Map<String, dynamic> toJson() => {'id': id, ...toDraftJson()};

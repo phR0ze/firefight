@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
-use firefight_core::model::{Action, ClientId, ClientView, TimerDef, TimerId, TimerKind, default_allow_client_dismiss};
+use firefight_core::model::{Action, ClientId, ClientView, TimerDef, TimerId, TimerKind, default_focus_on_fire};
 use firefight_core::protocol::{AgentMsg, ServerMsg};
 use firefight_core::run::TimerRun;
 use serde::{Deserialize, Serialize};
@@ -112,8 +112,8 @@ struct TimerDraft {
     kind: TimerKind,
     #[serde(default)]
     actions: Vec<Action>,
-    #[serde(default = "default_allow_client_dismiss")]
-    allow_client_dismiss: bool,
+    #[serde(default = "default_focus_on_fire")]
+    focus_on_fire: bool,
 }
 
 impl TimerDraft {
@@ -123,7 +123,7 @@ impl TimerDraft {
             name: self.name.trim().to_string(),
             kind: self.kind,
             actions: self.actions,
-            allow_client_dismiss: self.allow_client_dismiss,
+            focus_on_fire: self.focus_on_fire,
         };
         def.validate().map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
         Ok(def)
@@ -234,13 +234,14 @@ async fn bulk_client(State(s): State<AppState>, Path((id, op)): Path<(ClientId, 
     Ok(Json(s.hub().bulk_client(id, op, Utc::now())?))
 }
 
-/// Dismiss or add time to one of a client's timers, for that client only.
+/// Reset, dismiss or add time to one of a client's timers, for that client only.
 async fn control_client_timer(
     State(s): State<AppState>,
     Path((id, timer_id, op)): Path<(ClientId, TimerId, String)>,
     Query(q): Query<AddQuery>,
 ) -> ApiResult<TimerRun> {
     let op = match op.as_str() {
+        "reset" => Control::Reset,
         "dismiss" => Control::Dismiss,
         "add" => Control::Add { secs: q.secs.unwrap_or(60) },
         _ => return Err(ApiError(StatusCode::NOT_FOUND, format!("unknown operation {op}"))),
@@ -367,7 +368,6 @@ fn handle_agent_msg(s: &AppState, id: ClientId, msg: AgentMsg) {
     }
     match msg {
         AgentMsg::ActionResult { result } => hub.agent_result(id, result),
-        AgentMsg::Dismiss { timer_id } => hub.agent_dismiss(id, timer_id, Utc::now()),
         AgentMsg::RunComplete { timer_id, run_id } => hub.agent_run_complete(id, timer_id, run_id, Utc::now()),
         AgentMsg::Hello { .. } => {}
     }

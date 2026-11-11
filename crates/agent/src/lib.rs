@@ -2,21 +2,24 @@
 //! from the server and executes their actions locally when they finish.
 
 pub mod config;
+pub mod display;
 pub mod exec;
 pub mod sound;
 pub mod state;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use firefight_core::model::{ActionResult, ClientStatus};
-use firefight_core::protocol::{AgentMsg, AgentStatus, ServerMsg, UiMsg};
+use firefight_core::model::{ActionResult, ClientStatus, TimerId};
+use firefight_core::protocol::{AgentMsg, AgentStatus, ServerMsg};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
+use tokio::task::AbortHandle;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::AgentConfig;
@@ -32,6 +35,8 @@ struct Agent {
     /// Bumped whenever the UI-visible state changes.
     changed: watch::Sender<u64>,
     sound: SoundPlayer,
+    /// The task executing each timer's latest fired run.
+    tasks: Arc<Mutex<HashMap<TimerId, AbortHandle>>>,
     results: mpsc::UnboundedSender<ActionResult>,
     outbox: mpsc::UnboundedSender<AgentMsg>,
 }
@@ -58,15 +63,25 @@ impl Agent {
         let ctx = Ctx {
             timer_id: Some(fire.timer_id),
             run_id: Some(fire.run_id),
-            allow_loop: fire.allow_loop,
             sound: self.sound.clone(),
             results: self.results.clone(),
         };
         let outbox = self.outbox.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             exec::execute(fire.actions, ctx).await;
             let _ = outbox.send(AgentMsg::RunComplete { timer_id: fire.timer_id, run_id: fire.run_id });
         });
+        self.tasks.lock().expect("tasks mutex poisoned").insert(fire.timer_id, task.abort_handle());
+    }
+
+    /// Stop a timer's run immediately: abort its remaining actions (killing running
+    /// commands) and silence its sounds. It then never reports completion.
+    fn stop_run(&self, timer_id: TimerId) {
+        if let Some(task) = self.tasks.lock().expect("tasks mutex poisoned").remove(&timer_id) {
+            tracing::info!(timer = %timer_id, "run ended by the server, stopping its actions");
+            task.abort();
+        }
+        self.sound.stop(timer_id);
     }
 }
 
@@ -82,6 +97,7 @@ pub async fn run(config: AgentConfig, config_path: Option<PathBuf>, ui_listener:
         config_path,
         changed,
         sound: SoundPlayer::spawn(),
+        tasks: Arc::default(),
         results,
         outbox,
     };
@@ -219,9 +235,14 @@ fn handle_server_msg(agent: &Agent, msg: ServerMsg) {
             }
         }
         ServerMsg::Assigned { timers, runs, server_now } => {
-            let mut st = agent.state();
-            st.observe_clock(server_now, now);
-            st.apply_assigned(timers, runs);
+            let ended = {
+                let mut st = agent.state();
+                st.observe_clock(server_now, now);
+                st.apply_assigned(timers, runs)
+            };
+            for timer_id in ended {
+                agent.stop_run(timer_id);
+            }
         }
         ServerMsg::RunUpdate { run, server_now } => {
             let timer_id = run.timer_id;
@@ -231,7 +252,7 @@ fn handle_server_msg(agent: &Agent, msg: ServerMsg) {
                 st.apply_run(run)
             };
             if stopped {
-                agent.sound.stop(timer_id);
+                agent.stop_run(timer_id);
             }
             if let Some(f) = fire {
                 agent.fire(f);
@@ -239,17 +260,15 @@ fn handle_server_msg(agent: &Agent, msg: ServerMsg) {
         }
         ServerMsg::TestRun { actions } => {
             tracing::info!("test run requested");
-            // Test runs have no timer to dismiss, so they never loop.
-            let ctx = Ctx {
-                timer_id: None,
-                run_id: None,
-                allow_loop: false,
-                sound: agent.sound.clone(),
-                results: agent.results.clone(),
-            };
+            let ctx = Ctx { timer_id: None, run_id: None, sound: agent.sound.clone(), results: agent.results.clone() };
             tokio::spawn(exec::execute(actions, ctx));
         }
-        ServerMsg::Dismissed { timer_id, .. } => agent.sound.stop(timer_id),
+        ServerMsg::Dismissed { timer_id, run_id } => {
+            let ours = agent.state().take_stopped(timer_id, run_id);
+            if ours {
+                agent.stop_run(timer_id);
+            }
+        }
         ServerMsg::Rejected { .. } => {}
     }
     agent.notify();
@@ -271,17 +290,7 @@ async fn serve_ui(agent: Agent, listener: TcpListener) {
                     r = changed.changed() => if r.is_err() { return },
                     incoming = ws.next() => {
                         match incoming {
-                            Some(Ok(Message::Text(t))) => {
-                                // Release the state lock before acting on the dismiss.
-                                let dismiss = match serde_json::from_str(&t) {
-                                    Ok(UiMsg::Dismiss { timer_id }) if agent.state().can_dismiss(timer_id) => Some(timer_id),
-                                    _ => None,
-                                };
-                                if let Some(timer_id) = dismiss {
-                                    agent.sound.stop(timer_id);
-                                    let _ = agent.outbox.send(AgentMsg::Dismiss { timer_id });
-                                }
-                            }
+                            // The display only listens; this arm just notices it going away.
                             Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
                             Some(Ok(_)) => {}
                         }

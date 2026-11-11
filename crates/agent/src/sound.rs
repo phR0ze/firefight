@@ -19,7 +19,7 @@ enum Cmd {
         timer_id: Option<TimerId>,
         sound: String,
         volume: f32,
-        looping: bool,
+        duration: Option<Duration>,
         started: oneshot::Sender<Result<(), String>>,
         done: oneshot::Sender<()>,
     },
@@ -43,19 +43,20 @@ impl SoundPlayer {
         Self { tx }
     }
 
-    /// Start a sound. Resolves once playback started (or failed); the returned
-    /// receiver completes when the sound finishes or is stopped.
+    /// Start a sound, repeating it for `duration` if given, else playing it once.
+    /// Resolves once playback started (or failed); the returned receiver
+    /// completes when the sound finishes or is stopped.
     pub async fn play(
         &self,
         timer_id: Option<TimerId>,
         sound: String,
         volume: f32,
-        looping: bool,
+        duration: Option<Duration>,
     ) -> Result<oneshot::Receiver<()>, String> {
         let (started, started_rx) = oneshot::channel();
         let (done, done_rx) = oneshot::channel();
         self.tx
-            .send(Cmd::Play { timer_id, sound, volume, looping, started, done })
+            .send(Cmd::Play { timer_id, sound, volume, duration, started, done })
             .map_err(|_| "sound thread stopped".to_string())?;
         started_rx.await.map_err(|_| "sound thread stopped".to_string())??;
         Ok(done_rx)
@@ -78,7 +79,7 @@ fn sound_thread(rx: mpsc::Receiver<Cmd>) {
     let mut playing: Vec<Playing> = vec![];
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(Cmd::Play { timer_id, sound, volume, looping, started, done }) => {
+            Ok(Cmd::Play { timer_id, sound, volume, duration, started, done }) => {
                 let source = match load(&sound) {
                     Ok(s) => s,
                     Err(e) => {
@@ -100,10 +101,9 @@ fn sound_thread(rx: mpsc::Receiver<Cmd>) {
                 }
                 let sink = Sink::connect_new(stream.as_ref().expect("opened").mixer());
                 sink.set_volume(volume.clamp(0.0, 1.0));
-                if looping {
-                    sink.append(source.buffered().repeat_infinite());
-                } else {
-                    sink.append(source);
+                match duration {
+                    Some(d) => sink.append(source.buffered().repeat_infinite().take_duration(d)),
+                    None => sink.append(source),
                 }
                 let _ = started.send(Ok(()));
                 playing.push(Playing { timer_id, sink, done: Some(done) });

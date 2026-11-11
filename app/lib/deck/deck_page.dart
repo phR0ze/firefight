@@ -403,7 +403,8 @@ class _DeckTimerCard extends StatelessWidget {
     void op(String name, {int? secs}) => guard(context, () => api.control(def.id, name, addSecs: secs));
 
     final (label, action, primary) = switch (state) {
-      RunState.firing => ('Dismiss', () => op('dismiss'), true),
+      // Stops the clients' actions and sounds and returns the timer to its start.
+      RunState.firing => ('Reset', () => op('reset'), true),
       RunState.running when isAtTime => ('Disarm', () => op('reset'), false),
       RunState.running => ('Pause', () => op('pause'), false),
       RunState.paused => ('Resume', () => op('start'), false),

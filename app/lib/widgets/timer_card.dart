@@ -118,18 +118,17 @@ class StatusPill extends StatelessWidget {
   }
 }
 
-/// One line of the "ON FINISH" list, e.g. "♪ Gong · loop".
+/// One line of the "ON FINISH" list, e.g. "♪ Gong · 10s".
 class ActionLine extends StatelessWidget {
-  const ActionLine(this.action, {super.key, this.canLoop = true});
+  const ActionLine(this.action, {super.key});
   final TimerAction action;
-  final bool canLoop;
 
   @override
   Widget build(BuildContext context) {
     final (icon, text) = switch (action.kind) {
-      SoundAction(:final sound, :final loopUntilDismissed) => (
+      SoundAction(:final sound, :final durationSecs) => (
         '♪',
-        '${sound.split('/').last}${canLoop && loopUntilDismissed ? ' · loop' : ''}',
+        '${sound.split('/').last}${durationSecs != null ? ' · ${durationSecs}s' : ''}',
       ),
       CommandAction(:final cmd) => (r'$', cmd),
     };
@@ -238,7 +237,7 @@ class TimerCard extends StatelessWidget {
                         padding: EdgeInsets.only(top: 6),
                         child: Text('nothing', style: TextStyle(color: Palette.muted, fontSize: 13)),
                       ),
-                    for (final a in def.actions.take(3)) ActionLine(a, canLoop: def.allowClientDismiss),
+                    for (final a in def.actions.take(3)) ActionLine(a),
                     if (def.actions.length > 3)
                       Padding(
                         padding: const EdgeInsets.only(top: 6),

@@ -80,8 +80,9 @@ fn apply(def: &TimerDef, run: &mut TimerRun, op: Control, now: DateTime<Utc>) ->
         Control::Pause if at_time => bail!("scheduled timers cannot be paused"),
         Control::Pause => run.pause(now)?,
         Control::Add { secs } => run.add(secs * 1000, now),
-        Control::Reset => run.reset(total),
-        Control::Dismiss => {
+        Control::Reset if run.state != RunState::Firing => run.reset(total),
+        // Resetting a firing run cuts it short, ending it the same way it ends on its own.
+        Control::Reset | Control::Dismiss => {
             run.dismiss(total)?;
             // Repeating scheduled timers re-arm for their next occurrence.
             if let TimerKind::AtTime { repeat, .. } = &def.kind
@@ -327,7 +328,7 @@ impl Hub {
         let run = self.runs.get_mut(&id).ok_or_else(|| anyhow!("no such timer"))?;
         let run_id = run.run_id;
         apply(&def, run, op, now)?;
-        if let Control::Dismiss = op {
+        if let Control::Reset | Control::Dismiss = op {
             for c in self.shared_clients_with(id) {
                 self.send_agent(c.id, ServerMsg::Dismissed { timer_id: id, run_id });
             }
@@ -345,7 +346,7 @@ impl Hub {
         let run = self.detached.get_mut(&(def.id, client)).ok_or_else(|| anyhow!("no such run"))?;
         let run_id = run.run_id;
         apply(def, run, op, now)?;
-        if let Control::Dismiss = op {
+        if let Control::Reset | Control::Dismiss = op {
             self.send_agent(client, ServerMsg::Dismissed { timer_id: def.id, run_id });
         }
         self.broadcast_detached(def.id, client, now);
@@ -375,11 +376,11 @@ impl Hub {
         self.auto_complete_all(now);
     }
 
-    /// Timers clients cannot dismiss return to idle on their own once every
-    /// online client following the run has finished its actions. `client` picks
-    /// that client's copy of the run instead of the shared one.
+    /// A firing timer returns to idle on its own once every online client
+    /// following the run has finished its actions. `client` picks that client's
+    /// copy of the run instead of the shared one.
     fn auto_complete(&mut self, timer_id: TimerId, client: Option<ClientId>, now: DateTime<Utc>) {
-        let Some(def) = self.store.timer(timer_id).filter(|t| !t.allow_client_dismiss).cloned() else { return };
+        let Some(def) = self.store.timer(timer_id).cloned() else { return };
         let run = match client {
             Some(c) => self.detached.get(&(timer_id, c)),
             None => self.runs.get(&timer_id),
@@ -400,7 +401,7 @@ impl Hub {
                 None => self.control_shared(timer_id, Control::Dismiss, now),
             };
             if let Err(e) = res {
-                tracing::warn!("auto dismiss failed: {e}");
+                tracing::warn!("auto complete failed: {e}");
             }
         }
     }
@@ -733,27 +734,6 @@ impl Hub {
         self.emit_client(id);
     }
 
-    /// Dismiss from a client display; only allowed for timers assigned to it
-    /// that permit client dismissal. Dismisses the run the client follows: its
-    /// own copy, or the shared run of every client without one.
-    pub fn agent_dismiss(&mut self, id: ClientId, timer_id: TimerId, now: DateTime<Utc>) {
-        let allowed = self
-            .store
-            .client(id)
-            .is_some_and(|c| c.status == ClientStatus::Approved && c.assigned_timers.contains(&timer_id));
-        let Some(def) = self.store.timer(timer_id).filter(|t| allowed && t.allow_client_dismiss).cloned() else {
-            return;
-        };
-        let res = if self.detached.contains_key(&(timer_id, id)) {
-            self.control_detached(&def, id, Control::Dismiss, now)
-        } else {
-            self.control_shared(timer_id, Control::Dismiss, now)
-        };
-        if let Err(e) = res {
-            tracing::debug!("client dismiss ignored: {e}");
-        }
-    }
-
     /// An agent finished every action of a run. Recorded even if the server has
     /// not moved the run to `Firing` yet, since the agent may fire first.
     pub fn agent_run_complete(&mut self, id: ClientId, timer_id: TimerId, run_id: RunId, now: DateTime<Utc>) {
@@ -860,7 +840,7 @@ mod tests {
                 kind: ActionKind::Command { cmd: "true".into() },
                 mode: ActionMode::Parallel,
             }],
-            allow_client_dismiss: true,
+            focus_on_fire: true,
         }
     }
 
@@ -911,38 +891,52 @@ mod tests {
         hub.control(def.id, Control::Start, now).unwrap();
         assert!(matches!(rx_a.try_recv(), Ok(ServerMsg::RunUpdate { .. })));
         assert!(rx_b.try_recv().is_err());
-
-        // Client b cannot dismiss a timer it is not assigned.
-        hub.tick(now + chrono::Duration::seconds(61));
-        hub.agent_dismiss(b, def.id, now);
-        assert_eq!(hub.runs[&def.id].state, RunState::Firing);
-        hub.agent_dismiss(a, def.id, now);
-        assert_eq!(hub.runs[&def.id].state, RunState::Idle);
     }
 
     #[test]
-    fn client_dismiss_respects_timer_setting() {
+    fn deck_reset_stops_actions_on_clients() {
         let mut hub = hub();
         let now = Utc::now();
-        let def = hub.upsert_timer(TimerDef { allow_client_dismiss: false, ..countdown(60) }, now);
+        let def = hub.upsert_timer(countdown(60), now);
         let (a, _) = hello(&mut hub, None, None).unwrap();
         hub.approve_client(a, now).unwrap();
         hub.set_assignments(a, vec![def.id], now).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        hub.agents.insert(a, Conn { conn_id: Uuid::new_v4(), tx });
 
         hub.control(def.id, Control::Start, now).unwrap();
         hub.tick(now + chrono::Duration::seconds(61));
-        hub.agent_dismiss(a, def.id, now);
         assert_eq!(hub.runs[&def.id].state, RunState::Firing);
-        // The control deck can still dismiss it.
-        hub.control(def.id, Control::Dismiss, now).unwrap();
+        let run_id = hub.runs[&def.id].run_id;
+        drain(&mut rx);
+        hub.control(def.id, Control::Reset, now).unwrap();
         assert_eq!(hub.runs[&def.id].state, RunState::Idle);
+        assert!(drain(&mut rx).iter().any(|m| matches!(m, ServerMsg::Dismissed { run_id: r, .. } if *r == run_id)));
     }
 
     #[test]
-    fn non_dismissable_timer_idles_after_all_clients_complete() {
+    fn reset_of_firing_scheduled_timer_rearms_it() {
         let mut hub = hub();
         let now = Utc::now();
-        let def = hub.upsert_timer(TimerDef { allow_client_dismiss: false, ..countdown(60) }, now);
+        let time = (now + chrono::Duration::minutes(5)).with_timezone(&Local).time();
+        let def = TimerDef { kind: TimerKind::AtTime { time, repeat: Repeat::Daily }, ..countdown(60) };
+        let def = hub.upsert_timer(def, now);
+        // A connected client still running the actions keeps the timer firing.
+        let (a, _) = hello(&mut hub, None, None).unwrap();
+        hub.approve_client(a, now).unwrap();
+        hub.set_assignments(a, vec![def.id], now).unwrap();
+        let fired_at = hub.runs[&def.id].ends_at.unwrap();
+        hub.tick(fired_at);
+        assert_eq!(hub.runs[&def.id].state, RunState::Firing);
+        hub.control(def.id, Control::Reset, fired_at).unwrap();
+        assert_eq!(hub.runs[&def.id].state, RunState::Running, "armed for tomorrow");
+    }
+
+    #[test]
+    fn timer_idles_after_all_clients_complete() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let def = hub.upsert_timer(countdown(60), now);
         let (a, _) = hello(&mut hub, None, None).unwrap();
         let (b, _) = hello(&mut hub, None, None).unwrap();
         for c in [a, b] {
@@ -1116,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn client_dismiss_of_own_copy_leaves_others_firing() {
+    fn client_reset_of_own_copy_leaves_others_firing() {
         let mut hub = hub();
         let now = Utc::now();
         let (def, [(a, _), (b, _)]) = two_clients_one_timer(&mut hub, countdown(60));
@@ -1124,18 +1118,17 @@ mod tests {
         hub.bulk_client(b, Bulk::Start, now).unwrap();
         hub.tick(now + chrono::Duration::seconds(61));
 
-        hub.agent_dismiss(a, def.id, now);
+        hub.control_client(a, def.id, Control::Reset, now).unwrap();
         assert_eq!(hub.run_for(def.id, a).unwrap().state, RunState::Idle);
         assert!(!hub.detached.contains_key(&(def.id, a)), "a rejoins the idle shared run");
         assert_eq!(hub.run_for(def.id, b).unwrap().state, RunState::Firing);
     }
 
     #[test]
-    fn non_dismissable_copy_idles_when_its_client_completes() {
+    fn copy_idles_when_its_client_completes() {
         let mut hub = hub();
         let now = Utc::now();
-        let def = TimerDef { allow_client_dismiss: false, ..countdown(60) };
-        let (def, [(a, _), (b, _)]) = two_clients_one_timer(&mut hub, def);
+        let (def, [(a, _), (b, _)]) = two_clients_one_timer(&mut hub, countdown(60));
         hub.bulk_client(a, Bulk::Start, now).unwrap();
         hub.bulk_client(b, Bulk::Start, now).unwrap();
         hub.tick(now + chrono::Duration::seconds(61));
@@ -1293,20 +1286,6 @@ mod tests {
             assert_eq!(hub.runs[&t].state, RunState::Idle);
         }
         assert!(hub.bulk_all(Bulk::Reset, now).is_err(), "nothing left to reset");
-    }
-
-    #[test]
-    fn dismissable_timer_keeps_firing_after_completion() {
-        let mut hub = hub();
-        let now = Utc::now();
-        let def = hub.upsert_timer(countdown(60), now);
-        let (a, _) = hello(&mut hub, None, None).unwrap();
-        hub.approve_client(a, now).unwrap();
-        hub.set_assignments(a, vec![def.id], now).unwrap();
-        hub.control(def.id, Control::Start, now).unwrap();
-        hub.tick(now + chrono::Duration::seconds(61));
-        hub.agent_run_complete(a, def.id, hub.runs[&def.id].run_id, now);
-        assert_eq!(hub.runs[&def.id].state, RunState::Firing);
     }
 
     #[test]

@@ -24,10 +24,6 @@ pub enum AgentMsg {
     ActionResult {
         result: ActionResult,
     },
-    /// Dismiss pressed on the client display.
-    Dismiss {
-        timer_id: TimerId,
-    },
     /// Every action of a fired run has finished on this agent.
     RunComplete {
         timer_id: TimerId,
@@ -65,7 +61,7 @@ pub enum ServerMsg {
     TestRun {
         actions: Vec<Action>,
     },
-    /// Stop looping sounds for a run.
+    /// The run was reset or dismissed: stop its actions and sounds if still going.
     Dismissed {
         timer_id: TimerId,
         run_id: RunId,
@@ -145,13 +141,6 @@ pub enum UiEvent {
         /// compares it to its own clock on receipt to correct `ends_at` for skew.
         server_now: DateTime<Utc>,
     },
-}
-
-/// Local Flutter client display -> agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum UiMsg {
-    Dismiss { timer_id: TimerId },
 }
 
 #[cfg(test)]

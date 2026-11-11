@@ -11,23 +11,30 @@ import 'theme.dart';
 /// Arguments: `--mode=server|client`, `--server=<host:port>`, `--token=<admin token>`,
 /// `--token-file=<path>`, `--agent-port=<port>`. Values given here are remembered for the next
 /// launch. The Linux client display lives in the system tray: `--start-hidden` starts it there,
-/// `--no-tray` makes closing the window quit as usual.
+/// `--no-tray` makes closing the window quit as usual. `--supervised` is passed by
+/// firefight-agent when it runs the display: it then cannot be quit or switched to another mode.
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = (await AppSettings.load())..applyArgs(args);
   settings.adminToken ??= AppSettings.localAdminToken();
-  final tray = Platform.isLinux && settings.mode == AppMode.client && !args.contains('--no-tray')
-      ? ClientTray.start(startHidden: args.contains('--start-hidden'))
+  final client = Platform.isLinux && settings.mode == AppMode.client;
+  final supervised = client && args.contains('--supervised');
+  final tray = client && !args.contains('--no-tray')
+      ? ClientTray.start(startHidden: args.contains('--start-hidden'), supervised: supervised)
       : null;
-  runApp(FirefightApp(settings: settings, tray: tray));
+  if (supervised && tray == null) ClientTray.keepOpen();
+  runApp(FirefightApp(settings: settings, tray: tray, supervised: supervised));
 }
 
 class FirefightApp extends StatefulWidget {
-  const FirefightApp({super.key, required this.settings, this.tray});
+  const FirefightApp({super.key, required this.settings, this.tray, this.supervised = false});
   final AppSettings settings;
 
   /// Present when the client display runs in the system tray.
   final ClientTray? tray;
+
+  /// The client display is run by firefight-agent, which sets its mode and agent port.
+  final bool supervised;
 
   @override
   State<FirefightApp> createState() => _FirefightAppState();
@@ -75,7 +82,7 @@ class _FirefightAppState extends State<FirefightApp> {
               AppMode.client => ClientPage(
                 key: ValueKey(generation),
                 agentPort: settings.agentPort,
-                onSettings: _openSettings,
+                onSettings: widget.supervised ? null : _openSettings,
                 onFiring: widget.tray?.show,
               ),
             },

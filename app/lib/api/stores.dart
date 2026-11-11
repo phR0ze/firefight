@@ -232,6 +232,4 @@ class AgentStore extends _LiveSocket {
       for (final r in ev['runs'] as List) (r as Map<String, dynamic>)['timer_id'] as String: TimerRun.fromJson(r),
     };
   }
-
-  void dismiss(String timerId) => send({'type': 'dismiss', 'timer_id': timerId});
 }

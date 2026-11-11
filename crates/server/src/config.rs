@@ -7,9 +7,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use firefight_core::model::{
-    Action, ActionKind, ActionMode, TimerDef, TimerId, TimerKind, default_allow_client_dismiss,
-};
+use firefight_core::model::{Action, ActionKind, ActionMode, TimerDef, TimerId, TimerKind, default_focus_on_fire};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -32,8 +30,8 @@ pub struct DeclaredTimer {
     pub kind: TimerKind,
     #[serde(default)]
     pub actions: Vec<DeclaredAction>,
-    #[serde(default = "default_allow_client_dismiss")]
-    pub allow_client_dismiss: bool,
+    #[serde(default = "default_focus_on_fire")]
+    pub focus_on_fire: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,7 +79,7 @@ impl DeclaredConfig {
                     .enumerate()
                     .map(|(i, a)| Action { id: Uuid::new_v5(&id, &i.to_le_bytes()), kind: a.kind, mode: a.mode })
                     .collect(),
-                allow_client_dismiss: t.allow_client_dismiss,
+                focus_on_fire: t.focus_on_fire,
             };
             def.validate().map_err(|e| anyhow::anyhow!("timer {:?}: {e}", t.key))?;
             timers.push(def);
@@ -108,7 +106,7 @@ mod tests {
         let t = &r.timers[0];
         assert_eq!(t.id, timer_id("lab"));
         assert_eq!(t.id, timer_id("lab"), "deterministic");
-        assert!(t.allow_client_dismiss);
+        assert!(t.focus_on_fire);
         assert_eq!(t.actions[0].mode, ActionMode::Parallel);
         // Action ids are stable too.
         assert_eq!(

@@ -91,7 +91,7 @@ void main() {
     expect(button("Reset this client's timers").onPressed, isNotNull);
   });
 
-  testWidgets("a timer chip offers dismiss and +1 minute for the client's run", (tester) async {
+  testWidgets("a timer chip offers reset and +1 minute for the client's run", (tester) async {
     final store = DeckStore(server: 'unused:1', token: 't');
     addTearDown(store.dispose);
     store.onEvent({
@@ -143,17 +143,17 @@ void main() {
     }
 
     await open('Firing');
-    expect(enabled('Dismiss'), isTrue);
+    expect(enabled('Reset'), isTrue);
     expect(enabled('Snooze 1 minute'), isTrue);
     await close();
 
     await open('Idle');
-    expect(enabled('Dismiss'), isFalse);
+    expect(enabled('Reset'), isFalse);
     expect(enabled('Add 1 minute'), isTrue);
     await close();
 
     await open('Sched');
-    expect(enabled('Dismiss'), isFalse);
+    expect(enabled('Reset'), isFalse);
     expect(enabled('Add 1 minute'), isFalse, reason: 'scheduled timers only snooze while firing');
     await close();
   });

@@ -27,7 +27,7 @@ never runs actions itself.
 | `firefight-agent` (Rust)         | every client machine | Mirrors its assigned timers, runs actions when they finish                        |
 | `app` (Flutter, `--mode=server`) | admin machine        | Control deck: create/edit/start timers, approve clients, drag-and-drop assignment |
 | `app` (Flutter, Android)         | admin's phone        | The same control deck, laid out for a phone                                       |
-| `app` (Flutter, `--mode=client`) | client machines      | Display of the timers assigned to this machine, with Dismiss                      |
+| `app` (Flutter, `--mode=client`) | client machines      | Display of the timers assigned to this machine                                    |
 
 ```
  Flutter control deck ──REST + WebSocket──▶ firefight-server ◀──WebSocket── firefight-agent ◀── Flutter client display
@@ -74,7 +74,12 @@ cargo build --release
    The client appears under **Awaiting approval** in the control deck. Approve it, and the agent receives
    and stores its token in `~/.config/firefight/agent.toml`.
 
-4. **Optionally open the client display** on the client machine:
+4. **Optionally show the client display** on the client machine. Either let the agent run it, so it is
+   always up while the agent is (add this to the agent's command line):
+   ```bash
+   --display app/build/linux/x64/release/bundle/firefight
+   ```
+   or open it yourself:
    ```bash
    app/build/linux/x64/release/bundle/firefight --mode=client
    ```
@@ -88,6 +93,11 @@ The client display lives in the system tray: closing its window hides it (the tr
 it back, **Quit** exits), and it comes to the front by itself when one of its timers starts firing. Start it
 with `--start-hidden` to go straight to the tray, or `--no-tray` to make closing the window quit. The tray
 needs a panel that hosts StatusNotifierItems (most do; GNOME needs the AppIndicator extension).
+
+When the agent runs the display (`--display <path>`, with options for it passed as `--display-arg
+--start-hidden` and so on), it starts it a few seconds after the agent starts, relaunches it whenever it
+exits and stops it with the agent. While the agent runs, the display can't be quit: the tray has no **Quit**,
+closing the window without a tray only minimizes it, and its settings are hidden.
 
 ### Android control deck
 
@@ -128,7 +138,7 @@ The `--config` file declares timers by a stable `key` (the timer id is derived f
     "name": "Lab closes",
     "kind": { "type": "countdown", "duration_secs": 900 },
     "actions": [{ "kind": { "type": "command", "cmd": "loginctl lock-session" }, "mode": "after_previous" }],
-    "allow_client_dismiss": false
+    "focus_on_fire": true
   }]
 }
 ```

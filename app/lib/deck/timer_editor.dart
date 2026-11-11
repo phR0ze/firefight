@@ -30,7 +30,7 @@ class _TimerEditorState extends State<TimerEditor> {
   _RepeatChoice _repeat = _RepeatChoice.weekdays;
   Set<Weekday> _days = {Weekday.mon};
   late final List<TimerAction> _actions = [...?widget.initial?.actions];
-  late bool _allowClientDismiss = widget.initial?.allowClientDismiss ?? true;
+  late bool _focusOnFire = widget.initial?.focusOnFire ?? true;
   String? _error;
   String? _testStatus;
 
@@ -110,13 +110,7 @@ class _TimerEditorState extends State<TimerEditor> {
     }
     setState(() => _error = err);
     if (err != null) return null;
-    return TimerDef(
-      id: widget.initial?.id ?? '',
-      name: name,
-      kind: kind,
-      actions: _actions,
-      allowClientDismiss: _allowClientDismiss,
-    );
+    return TimerDef(id: widget.initial?.id ?? '', name: name, kind: kind, actions: _actions, focusOnFire: _focusOnFire);
   }
 
   Future<void> _testRun(ClientView client) async {
@@ -302,15 +296,15 @@ class _TimerEditorState extends State<TimerEditor> {
         ],
         _label('Client display'),
         CheckboxListTile(
-          value: _allowClientDismiss,
-          onChanged: (v) => setState(() => _allowClientDismiss = v!),
+          value: _focusOnFire,
+          onChanged: (v) => setState(() => _focusOnFire = v!),
           dense: true,
           contentPadding: EdgeInsets.zero,
           controlAffinity: ListTileControlAffinity.leading,
-          title: const Text('Clients can dismiss', style: TextStyle(fontSize: 13)),
+          title: const Text('Bring client display to front', style: TextStyle(fontSize: 13)),
           subtitle: const Text(
-            'When off, the timer returns to idle once every client finishes its actions. '
-            'The control deck can still dismiss it early.',
+            'When the timer fires, client displays pop to the front of the screen, even from the system '
+            'tray. Otherwise they stay where they are, possibly hidden behind other windows or in the tray.',
             style: TextStyle(color: Palette.muted, fontSize: 12),
           ),
         ),
@@ -368,7 +362,6 @@ class _TimerEditorState extends State<TimerEditor> {
                     index: i,
                     action: a,
                     isLast: i == _actions.length - 1,
-                    canLoop: _allowClientDismiss,
                     compact: _compact,
                     onChanged: (a) => _update(i, a),
                     onRemove: () => setState(() => _actions.removeAt(i)),
@@ -495,7 +488,6 @@ class _ActionStep extends StatelessWidget {
     required this.index,
     required this.action,
     required this.isLast,
-    required this.canLoop,
     required this.compact,
     required this.onChanged,
     required this.onRemove,
@@ -504,7 +496,6 @@ class _ActionStep extends StatelessWidget {
   final int index;
   final TimerAction action;
   final bool isLast;
-  final bool canLoop;
   final bool compact;
   final ValueChanged<TimerAction> onChanged;
   final VoidCallback onRemove;
@@ -540,7 +531,7 @@ class _ActionStep extends StatelessWidget {
                   border: Border.all(color: Palette.border),
                 ),
                 child: Material(
-                  // Gives the checkbox tile below a surface for its ink.
+                  // Gives the duration chips below a surface for their ink.
                   type: MaterialType.transparency,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -594,7 +585,6 @@ class _ActionStep extends StatelessWidget {
                       switch (action.kind) {
                         final SoundAction s => _SoundFields(
                           sound: s,
-                          canLoop: canLoop,
                           compact: compact,
                           onChanged: (k) => onChanged(action.copyWith(kind: k)),
                         ),
@@ -622,12 +612,8 @@ class _ActionStep extends StatelessWidget {
 }
 
 class _SoundFields extends StatelessWidget {
-  const _SoundFields({required this.sound, required this.canLoop, required this.compact, required this.onChanged});
+  const _SoundFields({required this.sound, required this.compact, required this.onChanged});
   final SoundAction sound;
-
-  /// False when clients cannot dismiss the timer: the sound then plays once so
-  /// the run can finish on its own.
-  final bool canLoop;
 
   /// Narrow screens put the volume slider on its own line.
   final bool compact;
@@ -635,10 +621,13 @@ class _SoundFields extends StatelessWidget {
 
   static const _custom = '__custom__';
 
-  SoundAction _with({String? name, double? volume, bool? loop}) => SoundAction(
+  /// Play-for choices in seconds; with none selected the sound plays once.
+  static const _durations = [5, 10, 15, 30];
+
+  SoundAction _with({String? name, double? volume, int? Function()? durationSecs}) => SoundAction(
     sound: name ?? sound.sound,
     volume: volume ?? sound.volume,
-    loopUntilDismissed: loop ?? sound.loopUntilDismissed,
+    durationSecs: durationSecs != null ? durationSecs() : sound.durationSecs,
   );
 
   @override
@@ -689,19 +678,25 @@ class _SoundFields extends StatelessWidget {
               onChanged: (v) => onChanged(_with(name: v)),
             ),
           ],
-          CheckboxListTile(
-            value: canLoop && sound.loopUntilDismissed,
-            onChanged: canLoop ? (v) => onChanged(_with(loop: v)) : null,
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            title: const Text('Loop until dismissed', style: TextStyle(fontSize: 13)),
-            subtitle: canLoop
-                ? null
-                : const Text(
-                    'Plays once: clients cannot dismiss this timer',
-                    style: TextStyle(color: Palette.muted, fontSize: 12),
-                  ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              for (final secs in _durations)
+                ChoiceChip(
+                  label: Text('${secs}s', style: const TextStyle(fontSize: 12)),
+                  visualDensity: VisualDensity.compact,
+                  selected: sound.durationSecs == secs,
+                  // Tapping the selected chip clears it so the sound plays once.
+                  onSelected: (on) => onChanged(_with(durationSecs: () => on ? secs : null)),
+                ),
+              Text(
+                sound.durationSecs == null ? 'Plays once' : 'Repeats for ${sound.durationSecs}s',
+                style: const TextStyle(color: Palette.muted, fontSize: 12),
+              ),
+            ],
           ),
         ],
       ),

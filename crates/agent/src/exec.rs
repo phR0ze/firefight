@@ -7,7 +7,7 @@ use chrono::Utc;
 use firefight_core::model::{Action, ActionKind, ActionMode, ActionResult, RunId, TimerId};
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 use crate::sound::SoundPlayer;
 
@@ -18,16 +18,26 @@ const MAX_MESSAGE: usize = 200;
 pub struct Ctx {
     pub timer_id: Option<TimerId>,
     pub run_id: Option<RunId>,
-    /// Whether "loop until dismissed" sounds may loop.
-    pub allow_loop: bool,
     pub sound: SoundPlayer,
     pub results: mpsc::UnboundedSender<ActionResult>,
+}
+
+/// Aborts the spawned actions when dropped, so aborting [`execute`] stops them too.
+struct AbortOnDrop(Vec<AbortHandle>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        for h in &self.0 {
+            h.abort();
+        }
+    }
 }
 
 /// Run actions in order. `AfterPrevious` actions wait for the action before
 /// them to finish; `Parallel` actions start immediately.
 pub async fn execute(actions: Vec<Action>, ctx: Ctx) {
     let ctx = std::sync::Arc::new(ctx);
+    let mut spawned = AbortOnDrop(vec![]);
     let mut prev: Option<JoinHandle<()>> = None;
     let mut all = vec![];
     for action in actions {
@@ -38,6 +48,7 @@ pub async fn execute(actions: Vec<Action>, ctx: Ctx) {
         }
         let ctx = ctx.clone();
         let h = tokio::spawn(async move { run_action(action, &ctx).await });
+        spawned.0.push(h.abort_handle());
         if let Some(p) = prev.replace(h) {
             all.push(p);
         }
@@ -68,15 +79,28 @@ async fn run_action(action: Action, ctx: &Ctx) {
                 Err(e) => report(false, None, e),
             }
         }
-        ActionKind::Sound { sound, volume, loop_until_dismissed } => {
-            let looping = *loop_until_dismissed && ctx.allow_loop;
-            match ctx.sound.play(ctx.timer_id, sound.clone(), *volume, looping).await {
+        ActionKind::Sound { sound, volume, duration_secs } => {
+            let duration = duration_secs.map(|s| Duration::from_secs(s.into()));
+            match ctx.sound.play(ctx.timer_id, sound.clone(), *volume, duration).await {
                 Ok(done) => {
                     report(true, None, format!("playing {sound}"));
                     let _ = done.await;
                 }
                 Err(e) => report(false, None, e),
             }
+        }
+    }
+}
+
+/// Kills a command's process group when dropped before the command exits (timeout or
+/// abort), so whatever `sh -c` started dies with it.
+struct KillGroup(Option<u32>);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0 {
+            // SAFETY: killpg only sends a signal; the group was created for this command.
+            unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
         }
     }
 }
@@ -88,13 +112,17 @@ async fn run_command(cmd: &str) -> Result<(Option<i32>, String), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .process_group(0)
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("failed to start: {e}"))?;
+    let mut group = KillGroup(child.id());
     let out = tokio::time::timeout(COMMAND_TIMEOUT, child.wait_with_output())
         .await
         .map_err(|_| format!("timed out after {}s", COMMAND_TIMEOUT.as_secs()))?
         .map_err(|e| e.to_string())?;
+    // Exited normally: leave anything it backgrounded running, as before.
+    group.0 = None;
     let code = out.status.code();
     let stderr = String::from_utf8_lossy(&out.stderr);
     let msg = match stderr.lines().rev().find(|l| !l.trim().is_empty()) {
@@ -130,7 +158,7 @@ mod tests {
 
     async fn run(actions: Vec<Action>) -> Vec<ActionResult> {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let ctx = Ctx { timer_id: None, run_id: None, allow_loop: false, sound: SoundPlayer::spawn(), results: tx };
+        let ctx = Ctx { timer_id: None, run_id: None, sound: SoundPlayer::spawn(), results: tx };
         execute(actions, ctx).await;
         let mut out = vec![];
         while let Ok(r) = rx.try_recv() {
@@ -164,10 +192,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aborting_stops_commands_and_their_children() {
+        let dir = std::env::temp_dir().join(format!("firefight-exec-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (bg, next) = (dir.join("bg"), dir.join("next"));
+        let task = tokio::spawn(run(vec![
+            // The subshell outlives `sh` unless its whole process group is killed.
+            cmd(&format!("(sleep 0.3; touch {}) & wait", bg.display()), ActionMode::Parallel),
+            cmd(&format!("touch {}", next.display()), ActionMode::AfterPrevious),
+        ]));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        task.abort();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!bg.exists(), "running command killed");
+        assert!(!next.exists(), "later actions never start");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn unknown_sound_is_reported() {
         let a = Action {
             id: Uuid::new_v4(),
-            kind: ActionKind::Sound { sound: "nope".into(), volume: 1.0, loop_until_dismissed: false },
+            kind: ActionKind::Sound { sound: "nope".into(), volume: 1.0, duration_secs: None },
             mode: ActionMode::Parallel,
         };
         let results = run(vec![a]).await;

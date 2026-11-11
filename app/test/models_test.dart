@@ -11,7 +11,7 @@ void main() {
     "name": "Stand-up",
     "kind": {"type": "at_time", "time": "09:45", "repeat": {"type": "days", "days": ["Mon", "Wed"]}},
     "actions": [
-      {"id": "a1", "kind": {"type": "sound", "sound": "gong", "volume": 0.8, "loop_until_dismissed": true}, "mode": "parallel"},
+      {"id": "a1", "kind": {"type": "sound", "sound": "gong", "volume": 0.8, "duration_secs": 10}, "mode": "parallel"},
       {"id": "a2", "kind": {"type": "command", "cmd": "loginctl lock-session"}, "mode": "after_previous"}
     ]
   }''';
@@ -35,7 +35,7 @@ void main() {
       'name': 'Tea',
       'kind': {'type': 'countdown', 'duration_secs': 240},
       'actions': <dynamic>[],
-      'allow_client_dismiss': true,
+      'focus_on_fire': true,
     });
   });
 

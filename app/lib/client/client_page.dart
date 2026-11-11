@@ -8,15 +8,31 @@ import '../widgets/timer_card.dart';
 /// Display for a client machine: shows the timers assigned to it by the server,
 /// as reported by the local firefight-agent.
 class ClientPage extends StatefulWidget {
-  const ClientPage({super.key, required this.agentPort, required this.onSettings, this.onFiring});
+  const ClientPage({super.key, required this.agentPort, this.onSettings, this.onFiring});
   final int agentPort;
-  final VoidCallback onSettings;
 
-  /// Called when an assigned timer starts firing, e.g. to bring a tray-hidden window forward.
+  /// Opens the settings screen; null hides the button (the agent runs this display).
+  final VoidCallback? onSettings;
+
+  /// Called when an assigned timer set to focus on fire starts firing, e.g. to bring a
+  /// tray-hidden window forward.
   final VoidCallback? onFiring;
 
   @override
   State<ClientPage> createState() => _ClientPageState();
+}
+
+/// Whether a run firing in [store] that is not among the [seen] runs belongs to a timer set to
+/// bring the display to the front.
+@visibleForTesting
+bool firingNeedsFocus(AgentStore store, Set<String> seen) {
+  final focus = {
+    for (final t in store.timers)
+      if (t.focusOnFire) t.id,
+  };
+  return store.runs.values.any(
+    (r) => r.state == RunState.firing && !seen.contains(r.runId) && focus.contains(r.timerId),
+  );
 }
 
 class _ClientPageState extends State<ClientPage> {
@@ -28,14 +44,13 @@ class _ClientPageState extends State<ClientPage> {
   final _firing = <String>{};
 
   void _checkFiring() {
-    final now = {
-      for (final r in store.runs.values)
-        if (r.state == RunState.firing) r.runId,
-    };
-    if (now.difference(_firing).isNotEmpty) widget.onFiring?.call();
+    if (firingNeedsFocus(store, _firing)) widget.onFiring?.call();
     _firing
       ..clear()
-      ..addAll(now);
+      ..addAll([
+        for (final r in store.runs.values)
+          if (r.state == RunState.firing) r.runId,
+      ]);
   }
 
   @override
@@ -64,11 +79,12 @@ class _ClientPageState extends State<ClientPage> {
                   const SizedBox(width: 16),
                   _StatusBadge(store: store),
                   const Spacer(),
-                  IconButton(
-                    onPressed: widget.onSettings,
-                    icon: const Icon(Icons.settings_outlined),
-                    tooltip: 'Settings',
-                  ),
+                  if (widget.onSettings != null)
+                    IconButton(
+                      onPressed: widget.onSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                      tooltip: 'Settings',
+                    ),
                 ],
               ),
             ),
@@ -125,9 +141,6 @@ class _ClientPageState extends State<ClientPage> {
                       run: store.runs[def.id],
                       serverNow: store.clock.now,
                       ringSize: (width * 0.4).clamp(96.0, 240.0),
-                      footer: def.allowClientDismiss && store.runs[def.id]?.state == RunState.firing
-                          ? FilledButton(onPressed: () => store.dismiss(def.id), child: const Text('Dismiss'))
-                          : null,
                     ),
                   ),
               ],

@@ -270,7 +270,7 @@ class ClientCard extends StatelessWidget {
   }
 }
 
-/// One of a client's timers on its card. Tapping it offers Dismiss and +1 minute for this
+/// One of a client's timers on its card. Tapping it offers Reset and +1 minute for this
 /// client only; the delete button unassigns it.
 class _TimerChip extends StatelessWidget {
   const _TimerChip({required this.client, required this.timerId, required this.store, required this.api});
@@ -279,7 +279,8 @@ class _TimerChip extends StatelessWidget {
   final DeckStore store;
   final AdminApi api;
 
-  Future<void> _actions(BuildContext context, TimerDef def, bool firing) async {
+  Future<void> _actions(BuildContext context, TimerDef def, RunState state) async {
+    final firing = state == RunState.firing;
     final box = context.findRenderObject()! as RenderBox;
     final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
     final position = RelativeRect.fromRect(
@@ -293,7 +294,7 @@ class _TimerChip extends StatelessWidget {
       context: context,
       position: position,
       items: [
-        PopupMenuItem(value: 'dismiss', enabled: firing, child: const Text('Dismiss')),
+        PopupMenuItem(value: 'reset', enabled: state != RunState.idle, child: const Text('Reset')),
         PopupMenuItem(
           value: 'add',
           // Scheduled timers fire at a fixed time; they can only be snoozed once firing.
@@ -310,15 +311,16 @@ class _TimerChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final def = store.timers[timerId];
-    final firing = store.runFor(client.id, timerId)?.state == RunState.firing;
+    final state = store.runFor(client.id, timerId)?.state ?? RunState.idle;
+    final firing = state == RunState.firing;
     return InputChip(
       label: _ChipLabel(
         name: def?.name ?? 'unknown',
         separate: store.clientRuns[client.id]?[timerId],
         serverNow: store.clock.now,
       ),
-      tooltip: def == null ? null : 'Dismiss or add time on this client',
-      onPressed: def == null ? null : () => _actions(context, def, firing),
+      tooltip: def == null ? null : 'Reset or add time on this client',
+      onPressed: def == null ? null : () => _actions(context, def, state),
       visualDensity: VisualDensity.compact,
       backgroundColor: const Color(0xFF20242C),
       side: BorderSide(color: firing ? Palette.amber : Palette.border),

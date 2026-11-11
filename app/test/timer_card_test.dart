@@ -10,7 +10,7 @@ void main() {
     id: 't',
     name: 'Tea steep',
     kind: const Countdown(Duration(minutes: 4)),
-    actions: [TimerAction(kind: const SoundAction(sound: 'chime', loopUntilDismissed: false))],
+    actions: [TimerAction(kind: const SoundAction(sound: 'chime', durationSecs: null))],
   );
 
   TimerRun run(RunState state, {Duration? left}) => TimerRun(
