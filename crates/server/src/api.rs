@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .route("/clients/{id}/assignments", put(set_assignments))
         .route("/clients/{id}/test", post(test_run))
         .route("/clients/{id}/{op}", post(bulk_client))
+        .route("/clients/{id}/timers/{timer_id}/{op}", post(control_client_timer))
         .route("/ws", get(admin_ws))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_admin));
 
@@ -233,8 +234,23 @@ async fn bulk_client(State(s): State<AppState>, Path((id, op)): Path<(ClientId, 
     Ok(Json(s.hub().bulk_client(id, op, Utc::now())?))
 }
 
+/// Dismiss or add time to one of a client's timers, for that client only.
+async fn control_client_timer(
+    State(s): State<AppState>,
+    Path((id, timer_id, op)): Path<(ClientId, TimerId, String)>,
+    Query(q): Query<AddQuery>,
+) -> ApiResult<TimerRun> {
+    let op = match op.as_str() {
+        "dismiss" => Control::Dismiss,
+        "add" => Control::Add { secs: q.secs.unwrap_or(60) },
+        _ => return Err(ApiError(StatusCode::NOT_FOUND, format!("unknown operation {op}"))),
+    };
+    Ok(Json(s.hub().control_client(id, timer_id, op, Utc::now())?))
+}
+
 /// Start, pause or reset every timer assigned to any approved client, for every client with it.
-/// Starting and resetting also bring clients back in step on each timer's shared run.
+/// Clients following their own copy of a run are started and paused where they are; resetting
+/// brings them back in step on each timer's shared run.
 async fn bulk_all(State(s): State<AppState>, op: Bulk) -> ApiResult<Vec<TimerRun>> {
     Ok(Json(s.hub().bulk_all(op, Utc::now())?))
 }

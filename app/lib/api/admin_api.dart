@@ -65,6 +65,10 @@ class AdminApi {
   /// Apply [op] to every timer assigned to a client.
   Future<void> bulkClient(String id, BulkOp op) => _send('POST', '/clients/$id/${op.name}');
 
+  /// `op` is dismiss or add, applied to one of a client's timers for that client only.
+  Future<void> controlClient(String clientId, String timerId, String op, {int? addSecs}) =>
+      _send('POST', '/clients/$clientId/timers/$timerId/$op', query: addSecs == null ? null : {'secs': '$addSecs'});
+
   /// Apply [op] to every timer assigned to any approved client.
   Future<void> bulkAll(BulkOp op) => _send('POST', '/clients/${op.name}');
 

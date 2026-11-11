@@ -29,7 +29,7 @@ pub struct Hub {
     /// Shared run of each timer, followed by every assigned client without its own copy.
     runs: HashMap<TimerId, TimerRun>,
     /// Copies of a timer's run that a client follows on its own, made when the timers of one
-    /// client are controlled from its card. Starting or resetting from the deck drops them.
+    /// client are controlled from its card. Resetting from the deck drops them.
     detached: HashMap<(TimerId, ClientId), TimerRun>,
     agents: HashMap<ClientId, Conn>,
     last_results: HashMap<ClientId, ActionResult>,
@@ -298,9 +298,9 @@ impl Hub {
         Ok(())
     }
 
-    /// Apply a control operation from the deck to every client with the timer. Starting or
-    /// resetting puts clients following their own copy back on the shared run; pausing and
-    /// dismissing apply to those copies in place.
+    /// Apply a control operation from the deck to every client with the timer. Resetting puts
+    /// clients following their own copy back on the shared run; starting, pausing and dismissing
+    /// apply to those copies in place.
     pub fn control(&mut self, id: TimerId, op: Control, now: DateTime<Utc>) -> Result<TimerRun> {
         let def = self.store.timer(id).cloned().ok_or_else(|| anyhow!("no such timer"))?;
         let copies = self.copies_of(id);
@@ -308,8 +308,8 @@ impl Hub {
         let mut copies_done = false;
         for c in copies {
             copies_done |= match op {
-                Control::Start | Control::Reset => self.drop_detached(id, c, now),
-                Control::Pause | Control::Dismiss => self.control_detached(&def, c, op, now).is_ok(),
+                Control::Reset => self.drop_detached(id, c, now),
+                Control::Start | Control::Pause | Control::Dismiss => self.control_detached(&def, c, op, now).is_ok(),
                 Control::Add { .. } => false,
             };
         }
@@ -333,6 +333,10 @@ impl Hub {
             }
         }
         self.broadcast_run(id, now);
+        // Clients waiting on an idle copy rejoin once the shared run is idle too.
+        for c in self.copies_of(id) {
+            self.maybe_rejoin(id, c, now);
+        }
         Ok(())
     }
 
@@ -503,25 +507,60 @@ impl Hub {
             if !op.applies(&def, &run) {
                 continue;
             }
-            let copied = !self.detached.contains_key(&(t, id));
-            if copied {
-                // A new run id keeps the copy's firing and completion apart from the shared run's.
-                self.detached.insert((t, id), TimerRun { run_id: Uuid::new_v4(), ..run });
-            }
-            match self.control_detached(&def, id, op.control(), now) {
-                Ok(()) => done.extend(self.run_for(t, id).cloned()),
-                Err(e) => {
-                    tracing::warn!(timer = %t, client = %id, "{op:?} failed: {e}");
-                    if copied {
-                        self.detached.remove(&(t, id));
-                    }
-                }
+            match self.control_own(&def, id, op.control(), now) {
+                Ok(run) => done.push(run),
+                Err(e) => tracing::warn!(timer = %t, client = %id, "{op:?} failed: {e}"),
             }
         }
         if done.is_empty() {
             bail!("{}", op.nothing_to_do());
         }
         Ok(done)
+    }
+
+    /// Apply a control operation from a client's card to one of its timers, for that client
+    /// only (see [`Hub::bulk_client`]).
+    pub fn control_client(
+        &mut self,
+        id: ClientId,
+        timer_id: TimerId,
+        op: Control,
+        now: DateTime<Utc>,
+    ) -> Result<TimerRun> {
+        let c = self.store.client(id).ok_or_else(|| anyhow!("no such client"))?;
+        if c.status != ClientStatus::Approved {
+            bail!("client is not approved");
+        }
+        if !c.assigned_timers.contains(&timer_id) {
+            bail!("timer is not assigned to this client");
+        }
+        let def = self.store.timer(timer_id).cloned().ok_or_else(|| anyhow!("no such timer"))?;
+        let firing = self.run_for(timer_id, id).is_some_and(|r| r.state == RunState::Firing);
+        if let Control::Add { .. } = op
+            && matches!(def.kind, TimerKind::AtTime { .. })
+            && !firing
+        {
+            bail!("scheduled timers can only be snoozed while firing");
+        }
+        self.control_own(&def, id, op, now)
+    }
+
+    /// Apply `op` to the run a client follows for `def`, first giving the client its own copy of
+    /// the shared run if it has none. Returns the run the client follows afterwards.
+    fn control_own(&mut self, def: &TimerDef, id: ClientId, op: Control, now: DateTime<Utc>) -> Result<TimerRun> {
+        let copied = !self.detached.contains_key(&(def.id, id));
+        if copied {
+            let run = self.runs.get(&def.id).ok_or_else(|| anyhow!("no such timer"))?;
+            // A new run id keeps the copy's firing and completion apart from the shared run's.
+            self.detached.insert((def.id, id), TimerRun { run_id: Uuid::new_v4(), ..run.clone() });
+        }
+        if let Err(e) = self.control_detached(def, id, op, now) {
+            if copied {
+                self.detached.remove(&(def.id, id));
+            }
+            return Err(e);
+        }
+        Ok(self.run_for(def.id, id).cloned().expect("timer exists"))
     }
 
     /// Apply `op` to every timer assigned to at least one approved client, all
@@ -546,8 +585,8 @@ impl Hub {
                 (Some(def), Some(run)) => {
                     op.applies(def, run)
                         || self.detached.iter().any(|((dt, _), copy)| {
-                            // Starting and resetting also bring clients back onto the shared run.
-                            dt == t && (matches!(op, Bulk::Start | Bulk::Reset) || op.applies(def, copy))
+                            // Resetting also brings clients back onto the shared run.
+                            dt == t && (op == Bulk::Reset || op.applies(def, copy))
                         })
                 }
                 _ => false,
@@ -1003,50 +1042,56 @@ mod tests {
     }
 
     #[test]
-    fn start_all_resyncs_clients_onto_the_shared_run() {
+    fn start_all_resumes_client_copies_where_they_are() {
         let mut hub = hub();
         let now = Utc::now();
         let (def, [(a, mut rx_a), (b, _)]) = two_clients_one_timer(&mut hub, countdown(60));
         hub.bulk_client(a, Bulk::Start, now).unwrap();
+        let later = now + chrono::Duration::seconds(10);
+        hub.bulk_client(a, Bulk::Pause, later).unwrap();
+        let copy = hub.run_for(def.id, a).unwrap().clone();
+        assert_eq!(copy.remaining_ms, 50_000);
         drain(&mut rx_a);
 
-        let later = now + chrono::Duration::seconds(10);
-        hub.bulk_all(Bulk::Start, later).unwrap();
-        assert!(hub.detached.is_empty());
-        let shared = hub.runs[&def.id].clone();
-        assert_eq!(shared.state, RunState::Running);
-        assert_eq!(shared.ends_at, Some(later + chrono::Duration::seconds(60)));
-        assert_eq!(hub.run_for(def.id, a), Some(&shared));
-        assert_eq!(hub.run_for(def.id, b), Some(&shared));
+        // a resumes its own copy with the 50s it had left; b starts the shared run from the top.
+        let resume = later + chrono::Duration::seconds(30);
+        hub.bulk_all(Bulk::Start, resume).unwrap();
+        let ra = hub.run_for(def.id, a).unwrap().clone();
+        assert!(hub.detached.contains_key(&(def.id, a)), "a keeps its own copy");
+        assert_eq!(ra.run_id, copy.run_id, "resumed, not restarted");
+        assert_eq!(ra.ends_at, Some(resume + chrono::Duration::seconds(50)));
+        assert_eq!(hub.run_for(def.id, b), hub.runs.get(&def.id));
+        assert_eq!(hub.runs[&def.id].ends_at, Some(resume + chrono::Duration::seconds(60)));
         assert!(
-            drain(&mut rx_a).iter().any(|m| matches!(m, ServerMsg::RunUpdate { run, .. } if *run == shared)),
-            "a is moved onto the shared run"
+            drain(&mut rx_a).iter().all(|m| !matches!(m, ServerMsg::RunUpdate { run, .. } if run.run_id != ra.run_id)),
+            "a is never sent the shared run"
         );
 
-        // Already in step and running: nothing left to start.
-        assert!(hub.bulk_all(Bulk::Start, later).is_err());
+        // Everything is running: nothing left to start.
+        assert!(hub.bulk_all(Bulk::Start, resume).is_err());
 
-        // A shared run already running still re-syncs a client following its own copy.
-        hub.bulk_client(a, Bulk::Pause, later).unwrap();
-        assert!(hub.detached.contains_key(&(def.id, a)));
-        hub.bulk_all(Bulk::Start, later).unwrap();
+        // Only a reset brings a back onto the shared run.
+        hub.bulk_all(Bulk::Reset, resume).unwrap();
         assert!(hub.detached.is_empty());
-        assert_eq!(hub.runs[&def.id], shared, "shared run left as it was");
     }
 
     #[test]
-    fn timer_card_start_and_reset_resync_but_pause_does_not() {
+    fn timer_card_start_and_pause_keep_copies_but_reset_resyncs() {
         let mut hub = hub();
         let now = Utc::now();
         let (def, [(a, _), (b, _)]) = two_clients_one_timer(&mut hub, countdown(60));
         hub.bulk_client(a, Bulk::Start, now).unwrap();
+        hub.bulk_client(a, Bulk::Pause, now).unwrap();
 
         hub.control(def.id, Control::Start, now).unwrap();
-        assert!(hub.detached.is_empty());
+        assert_eq!(hub.runs[&def.id].state, RunState::Running);
+        assert_eq!(hub.run_for(def.id, a).unwrap().state, RunState::Running);
+        assert!(hub.detached.contains_key(&(def.id, a)), "a keeps its own copy");
 
         hub.bulk_client(b, Bulk::Pause, now).unwrap();
         hub.control(def.id, Control::Pause, now).unwrap();
         assert_eq!(hub.runs[&def.id].state, RunState::Paused);
+        assert_eq!(hub.run_for(def.id, a).unwrap().state, RunState::Paused);
         assert!(hub.detached.contains_key(&(def.id, b)), "b keeps its own paused copy");
 
         hub.control(def.id, Control::Reset, now).unwrap();
@@ -1099,6 +1144,70 @@ mod tests {
         hub.agent_run_complete(a, def.id, run_a, now);
         assert!(!hub.detached.contains_key(&(def.id, a)));
         assert_eq!(hub.run_for(def.id, b).unwrap().state, RunState::Firing, "still waiting on b");
+    }
+
+    #[test]
+    fn client_dismiss_from_deck_leaves_shared_run_firing_for_others() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let (def, [(a, mut rx_a), (b, mut rx_b)]) = two_clients_one_timer(&mut hub, countdown(60));
+        hub.control(def.id, Control::Start, now).unwrap();
+        hub.tick(now + chrono::Duration::seconds(61));
+        drain(&mut rx_a);
+        drain(&mut rx_b);
+
+        let run = hub.control_client(a, def.id, Control::Dismiss, now).unwrap();
+        assert_eq!(run.state, RunState::Idle);
+        assert!(hub.detached.contains_key(&(def.id, a)), "a waits on its own idle copy");
+        assert_eq!(hub.run_for(def.id, b).unwrap().state, RunState::Firing);
+        assert_eq!(hub.runs[&def.id].state, RunState::Firing);
+        assert!(
+            drain(&mut rx_a)
+                .iter()
+                .any(|m| matches!(m, ServerMsg::RunUpdate { run, .. } if run.state == RunState::Idle))
+        );
+        assert!(drain(&mut rx_b).is_empty(), "b is not told about a's dismissal");
+
+        // Nothing to dismiss now.
+        assert!(hub.control_client(a, def.id, Control::Dismiss, now).is_err());
+        // Once the shared run is dismissed too, a rejoins it.
+        hub.control(def.id, Control::Dismiss, now).unwrap();
+        assert!(hub.detached.is_empty());
+    }
+
+    #[test]
+    fn client_add_extends_only_that_client() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let (def, [(a, _), (b, _)]) = two_clients_one_timer(&mut hub, countdown(60));
+        hub.control(def.id, Control::Start, now).unwrap();
+        let shared_end = hub.runs[&def.id].ends_at;
+
+        hub.control_client(a, def.id, Control::Add { secs: 60 }, now).unwrap();
+        assert_eq!(hub.run_for(def.id, a).unwrap().ends_at, Some(now + chrono::Duration::seconds(120)));
+        assert_eq!(hub.run_for(def.id, b).unwrap().ends_at, shared_end);
+
+        // Adding again extends a's existing copy.
+        hub.control_client(a, def.id, Control::Add { secs: 60 }, now).unwrap();
+        assert_eq!(hub.run_for(def.id, a).unwrap().ends_at, Some(now + chrono::Duration::seconds(180)));
+    }
+
+    #[test]
+    fn client_control_rejects_scheduled_add_unless_firing_and_unknown_targets() {
+        let mut hub = hub();
+        let now = Utc::now();
+        let scheduled = TimerDef {
+            kind: TimerKind::AtTime { time: chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap(), repeat: Repeat::Daily },
+            ..countdown(1)
+        };
+        let (def, [(a, _), (b, _)]) = two_clients_one_timer(&mut hub, scheduled);
+        assert!(hub.control_client(a, def.id, Control::Add { secs: 60 }, now).is_err());
+        assert!(hub.detached.is_empty(), "failed op leaves no copy");
+
+        let other = hub.upsert_timer(countdown(60), now);
+        assert!(hub.control_client(a, other.id, Control::Dismiss, now).is_err(), "not assigned");
+        assert!(hub.control_client(Uuid::new_v4(), def.id, Control::Dismiss, now).is_err(), "unknown client");
+        assert!(hub.control_client(b, Uuid::new_v4(), Control::Dismiss, now).is_err(), "unknown timer");
     }
 
     #[test]

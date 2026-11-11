@@ -258,21 +258,7 @@ class ClientCard extends StatelessWidget {
                 runSpacing: 6,
                 children: [
                   for (final id in client.assignedTimers)
-                    InputChip(
-                      label: _ChipLabel(
-                        name: store.timers[id]?.name ?? 'unknown',
-                        separate: store.clientRuns[client.id]?[id],
-                        serverNow: store.clock.now,
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      backgroundColor: const Color(0xFF20242C),
-                      side: const BorderSide(color: Palette.border),
-                      deleteButtonTooltipMessage: 'Unassign',
-                      onDeleted: () => guard(
-                        context,
-                        () => api.setAssignments(client.id, client.assignedTimers.where((t) => t != id).toList()),
-                      ),
-                    ),
+                    _TimerChip(client: client, timerId: id, store: store, api: api),
                 ],
               ),
               if (client.lastResult case final r?) _LastResult(result: r, timerName: store.timers[r.timerId]?.name),
@@ -280,6 +266,67 @@ class ClientCard extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// One of a client's timers on its card. Tapping it offers Dismiss and +1 minute for this
+/// client only; the delete button unassigns it.
+class _TimerChip extends StatelessWidget {
+  const _TimerChip({required this.client, required this.timerId, required this.store, required this.api});
+  final ClientView client;
+  final String timerId;
+  final DeckStore store;
+  final AdminApi api;
+
+  Future<void> _actions(BuildContext context, TimerDef def, bool firing) async {
+    final box = context.findRenderObject()! as RenderBox;
+    final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        box.localToGlobal(box.size.bottomLeft(Offset.zero), ancestor: overlay),
+        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final op = await showMenu<String>(
+      context: context,
+      position: position,
+      items: [
+        PopupMenuItem(value: 'dismiss', enabled: firing, child: const Text('Dismiss')),
+        PopupMenuItem(
+          value: 'add',
+          // Scheduled timers fire at a fixed time; they can only be snoozed once firing.
+          enabled: firing || def.kind is! AtTime,
+          child: Text(firing ? 'Snooze 1 minute' : 'Add 1 minute'),
+        ),
+      ],
+    );
+    if (op != null && context.mounted) {
+      await guard(context, () => api.controlClient(client.id, timerId, op, addSecs: op == 'add' ? 60 : null));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final def = store.timers[timerId];
+    final firing = store.runFor(client.id, timerId)?.state == RunState.firing;
+    return InputChip(
+      label: _ChipLabel(
+        name: def?.name ?? 'unknown',
+        separate: store.clientRuns[client.id]?[timerId],
+        serverNow: store.clock.now,
+      ),
+      tooltip: def == null ? null : 'Dismiss or add time on this client',
+      onPressed: def == null ? null : () => _actions(context, def, firing),
+      visualDensity: VisualDensity.compact,
+      backgroundColor: const Color(0xFF20242C),
+      side: BorderSide(color: firing ? Palette.amber : Palette.border),
+      deleteButtonTooltipMessage: 'Unassign',
+      onDeleted: () => guard(
+        context,
+        () => api.setAssignments(client.id, client.assignedTimers.where((t) => t != timerId).toList()),
+      ),
     );
   }
 }

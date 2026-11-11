@@ -193,8 +193,8 @@ class _ConnectionBanner extends StatelessWidget {
 bool _anyApplies(DeckStore store, BulkOp op) {
   final approved = store.clients.values.where((c) => c.status == ClientStatus.approved);
   final copies = approved.expand((c) => store.clientRuns[c.id]?.values ?? const <TimerRun>[]);
-  // Starting or resetting all also brings clients following their own copy back in step.
-  if (op != BulkOp.pause && copies.isNotEmpty) return true;
+  // Resetting all also brings clients following their own copy back in step.
+  if (op == BulkOp.reset && copies.isNotEmpty) return true;
   return op.appliesToAny(approved.expand((c) => c.assignedTimers), store.timers, (id) => store.runs[id]) ||
       copies.any((r) => store.timers[r.timerId] != null && op.appliesTo(store.timers[r.timerId]!, r));
 }
@@ -273,9 +273,9 @@ class _Header extends StatelessWidget {
             const SizedBox(width: 8),
             for (final op in BulkOp.values) ...[
               Tooltip(
-                message: op == BulkOp.pause
-                    ? 'Pause every timer assigned to a client'
-                    : '${op.label} every timer assigned to a client, in step on every client',
+                message: op == BulkOp.reset
+                    ? 'Reset every timer assigned to a client, in step on every client'
+                    : '${op.label} every timer assigned to a client',
                 child: OutlinedButton.icon(
                   onPressed: onBulk(op),
                   icon: Icon(op.icon, size: 20),
@@ -408,7 +408,7 @@ class _DeckTimerCard extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Tooltip(
-                message: 'Started from a client card. Start or reset here to bring them back in step.',
+                message: 'Started from a client card. Reset here to bring them back in step.',
                 child: Text(
                   '$separate client${separate == 1 ? '' : 's'} running separately',
                   style: const TextStyle(color: Palette.muted, fontSize: 12),
