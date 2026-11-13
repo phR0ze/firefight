@@ -311,12 +311,15 @@ class _TimerChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final def = store.timers[timerId];
-    final state = store.runFor(client.id, timerId)?.state ?? RunState.idle;
+    final run = store.runFor(client.id, timerId);
+    final state = run?.state ?? RunState.idle;
     final firing = state == RunState.firing;
     return InputChip(
       label: _ChipLabel(
         name: def?.name ?? 'unknown',
-        separate: store.clientRuns[client.id]?[timerId],
+        kind: def?.kind,
+        run: run,
+        separate: store.clientRuns[client.id]?.containsKey(timerId) ?? false,
         serverNow: store.clock.now,
       ),
       tooltip: def == null ? null : 'Reset or add time on this client',
@@ -333,21 +336,33 @@ class _TimerChip extends StatelessWidget {
   }
 }
 
-/// A timer's name on a client card, plus the state and time left of the
-/// client's own copy of the run when it isn't following the shared one.
+/// A timer's name on a client card, plus the state and time left of the run the
+/// client follows, whether its own copy or the shared one.
 class _ChipLabel extends StatelessWidget {
-  const _ChipLabel({required this.name, required this.separate, required this.serverNow});
+  const _ChipLabel({
+    required this.name,
+    required this.kind,
+    required this.run,
+    required this.separate,
+    required this.serverNow,
+  });
   final String name;
-  final TimerRun? separate;
+  final TimerKind? kind;
+  final TimerRun? run;
+
+  /// Whether the client follows its own copy of the run rather than the shared one.
+  final bool separate;
   final DateTime Function() serverNow;
 
   @override
   Widget build(BuildContext context) {
-    final run = separate;
+    final run = this.run;
     if (run == null) return Text(name, style: const TextStyle(fontSize: 12));
     final c = pillColors(run.state);
     return Tooltip(
-      message: 'Running separately from other clients (${run.state.name})',
+      message: separate
+          ? 'Running separately from other clients (${run.state.name})'
+          : 'In step with other clients (${run.state.name})',
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -359,7 +374,11 @@ class _ChipLabel extends StatelessWidget {
             child: Ticking(
               active: run.state == RunState.running,
               builder: (_) => Text(
-                run.state == RunState.firing ? 'FIRING' : formatRemaining(run.remainingAt(serverNow())),
+                switch ((run.state, kind)) {
+                  (RunState.firing, _) => 'FIRING',
+                  (RunState.idle, AtTime(:final time)) => formatHm(time),
+                  _ => formatRemaining(run.remainingAt(serverNow())),
+                },
                 style: TextStyle(color: c.fg, fontSize: 11, fontFamily: monoFamily, fontWeight: FontWeight.w700),
               ),
             ),
